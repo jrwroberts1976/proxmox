@@ -9,12 +9,17 @@ This repository tracks the build, configuration, migration, and operational runb
 - **Virtualisation:** Intel VT-x
 - **RAM:** 8 GB DDR4-2667, Samsung M471A1K43DB1-CTD, one module installed
 - **Primary storage:** 256 GB WDC PC SN520 NVMe (`WDC PC SN520 SDAPNUW-256G-1006`)
+- **NVMe health:** SMART passed, 6% life used, 0 media/data integrity errors
+- **NVMe temperature:** 45 C at baseline
+- **BIOS:** HP Q23 Ver. 02.07.00, released 2019-04-12
 - **Proxmox VE:** 9.2.0
 - **pve-manager:** 9.2.11
 - **Kernel:** 7.0.14-14-pve
 - **Management bridge:** `vmbr0`
 - **Management IP:** `192.168.2.70/24`
 - **Gateway:** `192.168.2.1`
+- **Current DNS resolver:** `192.168.2.48`
+- **DNS search domain:** `jameshouse`
 
 ## Build status
 
@@ -25,8 +30,11 @@ This repository tracks the build, configuration, migration, and operational runb
 - [x] Initial package update completed
 - [x] Headless reboot test passed
 - [x] Hardware and network baseline captured
-- [ ] NVMe SMART/health review
-- [ ] BIOS / firmware inventory
+- [x] NVMe SMART/health review
+- [x] BIOS / firmware inventory
+- [x] DNS baseline captured
+- [ ] Confirm management IP reservation
+- [ ] Review/update HP BIOS firmware
 - [ ] Host security baseline
 - [ ] Monitoring integration
 - [ ] Backup destination and restore test
