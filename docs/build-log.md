@@ -76,6 +76,7 @@ The BIOS is substantially older than the current platform software and should be
 - Proxmox bridge: `vmbr0`
 - Static management address: `192.168.2.70/24`
 - Default gateway: `192.168.2.1`
+- ASUS DHCP reservation for `192.168.2.70`: **configured**
 
 Current `/etc/network/interfaces`:
 
@@ -115,13 +116,13 @@ The Proxmox host currently relies on one DNS server (`192.168.2.48`). The target
 - NVMe SMART health reviewed
 - BIOS/firmware baseline captured
 - DNS baseline captured
+- Static management address protected by ASUS DHCP reservation
 
 ### Next actions
 
-1. Confirm the router/DHCP reservation for `192.168.2.70` so it cannot be allocated to another client.
-2. Check HP for a newer supported Q23 BIOS and plan a controlled firmware update if appropriate.
-3. Establish host monitoring, including NVMe temperature/health and unsafe-shutdown counter.
-4. Establish host security baseline and vulnerability scanning.
-5. Decide external backup destination before production migration.
-6. Build a disposable Debian VM and prove backup/restore.
-7. Add the second independent DNS resolver before relying on the new platform for production services.
+1. Check HP for a newer supported Q23 BIOS and plan a controlled firmware update if appropriate.
+2. Establish host monitoring, including NVMe temperature/health and unsafe-shutdown counter.
+3. Establish host security baseline and vulnerability scanning.
+4. Decide external backup destination before production migration.
+5. Build a disposable Debian VM and prove backup/restore.
+6. Add the second independent DNS resolver before relying on the new platform for production services.
