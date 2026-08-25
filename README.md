@@ -2,6 +2,8 @@
 
 This repository tracks the build, configuration, migration, and operational runbooks for the Proxmox homelab platform.
 
+**Project status:** host bootstrap complete; production migration is paused until the Jenkins work is finished. New infrastructure will be built Infrastructure-as-Code first.
+
 ## Hardware
 
 | Component | Current specification | Notes |
@@ -17,7 +19,7 @@ This repository tracks the build, configuration, migration, and operational runb
 | NVMe data written | 17.7 TB | Baseline captured 2026-08-25 |
 | NVMe unsafe shutdowns | 103 | Historical baseline; monitor for increases |
 | BIOS | HP Q23 Ver. 02.07.00 | Released 2019-04-12; firmware update review planned |
-| NIC | Integrated Gigabit Ethernet | Proxmox interface `nic0` |
+| NIC | Integrated Gigabit Ethernet | Proxmox interface `nic0`; 1 Gbit/s full duplex validated |
 | Management bridge | `vmbr0` | Bridged to `nic0` |
 | Management IP | `192.168.2.70/24` | Static and protected by ASUS DHCP reservation |
 | Gateway | `192.168.2.1` | ASUS router |
@@ -33,6 +35,7 @@ This repository tracks the build, configuration, migration, and operational runb
 | Operating system | Debian GNU/Linux 13 (trixie) |
 | Repository | `pve-no-subscription` enabled |
 | Enterprise repositories | PVE and Ceph Enterprise disabled |
+| node_exporter | 1.9.0-1+b4 on port 9100 |
 | Headless operation | Reboot and remote-management test passed |
 
 ## Build status
@@ -50,11 +53,15 @@ This repository tracks the build, configuration, migration, and operational runb
 - [x] Management IP reservation configured
 - [x] Intel VT-x validated
 - [x] Intel VT-d / IOMMU validated
+- [x] Thermal baseline captured
+- [x] node_exporter endpoint and thermal metrics validated
 - [ ] Review/update HP BIOS firmware
+- [ ] Add Proxmox target to central Prometheus/Grafana
 - [ ] Host security baseline
-- [ ] Monitoring integration
 - [ ] Backup destination and restore test
-- [ ] Test Debian VM
+- [ ] IaC foundation
+- [ ] Disposable IaC Debian VM proof
+- [ ] Jenkins IaC integration
 - [ ] Production workload migration
 
 ## Target architecture
@@ -63,4 +70,8 @@ The Proxmox host will become the main x86 compute platform. DNS remains independ
 
 Planned workloads include a Debian Docker VM, Home Assistant OS VM, and future test/lab VMs.
 
-See `docs/build-log.md` for the chronological implementation record.
+## Documentation
+
+- [`docs/project-plan.md`](docs/project-plan.md) — full project plan, IaC model, Jenkins integration, migration gates, DNS resilience, backup/DR and acceptance criteria.
+- [`docs/installation.md`](docs/installation.md) — physical host installation, repository setup, networking, validation commands, SMART/thermal/virtualisation baselines and post-install gates.
+- [`docs/build-log.md`](docs/build-log.md) — chronological implementation record of changes performed on the live host.
