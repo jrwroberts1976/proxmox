@@ -118,11 +118,94 @@ The Proxmox host currently relies on one DNS server (`192.168.2.48`). The target
 - DNS baseline captured
 - Static management address protected by ASUS DHCP reservation
 
+---
+
+## 2026-08-26 — Secondary SSD installation and validation
+
+### Physical installation
+
+A second SSD was installed in the HP ProDesk and detected by Proxmox as:
+
+```text
+/dev/sda
+KINGSTON SA400S37480G
+480 GB raw capacity / 447.1 GiB visible capacity
+SATA 3.2, 6.0 Gb/s
+```
+
+The Proxmox system disk remains the existing WDC PC SN520 NVMe (`/dev/nvme0n1`).
+
+### Existing disk state
+
+At detection, the Kingston contained one legacy NTFS partition:
+
+```text
+/dev/sda1  447.1G  ntfs  LABEL="New Volume"
+```
+
+Validation confirmed:
+
+- `/dev/sda1` was not mounted.
+- `/dev/sda` was not an LVM physical volume.
+- Existing Proxmox volume group `pve` remained solely on `/dev/nvme0n1p3`.
+- Existing Proxmox storage remained `local` and `local-lvm` only.
+
+The legacy NTFS filesystem has not yet been recorded as wiped; destruction/provisioning is intentionally treated as a separate controlled step.
+
+### Kingston SMART baseline
+
+Device: `KINGSTON SA400S37480G`
+
+- SMART overall health: **PASSED**
+- Firmware: `SBFKB1C3`
+- SATA negotiated speed: **6.0 Gb/s**
+- SMART support: enabled
+- Power-on hours at baseline: **11,386**
+- Power cycles: **4,307**
+- Temperature during initial validation: **28–30 C**
+- Lifetime host writes: approximately **10,047 GiB**
+- Lifetime reads: approximately **14,669 GiB**
+- Program fail count: **0**
+- Erase fail count: **0**
+- SATA CRC error count: **0**
+- Historical reported uncorrectable count: **1**
+- Historical reallocated event count: **1**
+- Historical unsafe shutdown count: **125**
+
+The SMART life attribute is consistent with approximately 94% life remaining / 6% life consumed for this Phison-driven Kingston SSD.
+
+### Extended SMART self-test
+
+An extended offline SMART self-test was run against `/dev/sda` and completed successfully:
+
+```text
+Extended offline    Completed without error    00%
+LBA_of_first_error: -
+```
+
+Post-test SMART overall health remained **PASSED**.
+
+### Storage decision
+
+Current target design:
+
+```text
+256 GB WDC NVMe
+├── Proxmox OS
+├── local
+└── local-lvm
+
+480 GB Kingston A400 SATA SSD
+└── planned dedicated VM/LXC storage
+```
+
+The second SSD will not be treated as the sole backup location. Backup storage must remain external to the Proxmox host.
+
 ### Next actions
 
-1. Check HP for a newer supported Q23 BIOS and plan a controlled firmware update if appropriate.
-2. Establish host monitoring, including NVMe temperature/health and unsafe-shutdown counter.
-3. Establish host security baseline and vulnerability scanning.
-4. Decide external backup destination before production migration.
-5. Build a disposable Debian VM and prove backup/restore.
-6. Add the second independent DNS resolver before relying on the new platform for production services.
+1. Deliberately wipe the legacy NTFS signature/partition from `/dev/sda` after final confirmation.
+2. Provision the Kingston as dedicated Proxmox VM/LXC storage with clear storage/VG naming.
+3. Record the resulting storage layout and validate it in `pvesm status`.
+4. Review/update HP Q23 BIOS when the maintenance window allows.
+5. Add Proxmox node exporter target to central Prometheus/Grafana.
+6. Continue host security and backup/restore design before production migration.
