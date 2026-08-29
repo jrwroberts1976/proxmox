@@ -1,0 +1,34 @@
+# OpenTofu / Terraform runtime state
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+*.plan
+crash.log
+crash.*.log
+
+# Local variable files may contain credentials
+*.tfvars
+*.tfvars.json
+!*.tfvars.example
+
+# Local CLI configuration
+.terraformrc
+terraform.rc
+
+# Environment / secret material
+.env
+.env.*
+!.env.example
+secrets/
+credentials/
+
+# Private keys and certificates
+*.key
+*.pem
+*.p12
+*.pfx
+
+# Ansible local secret material
+ansible/.vault_pass
+ansible/vault-password*
