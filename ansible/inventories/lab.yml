@@ -1,0 +1,8 @@
+all:
+  children:
+    proxmox_lab:
+      hosts:
+        debian-iac-test-01:
+          ansible_host: 192.168.2.120
+          ansible_user: james
+          ansible_python_interpreter: /usr/bin/python3.13
