@@ -22,6 +22,7 @@ resource "proxmox_virtual_environment_vm" "debian_iac_test" {
   vm_id     = var.vm_id
 
   started         = false
+  on_boot         = false
   stop_on_destroy = true
 
   agent {
