@@ -21,13 +21,16 @@ resource "proxmox_virtual_environment_vm" "debian_iac_test" {
   node_name = var.node_name
   vm_id     = var.vm_id
 
-  started         = true
-  on_boot         = false
-  stop_on_destroy = true
+  started             = true
+  on_boot             = false
+  stop_on_destroy     = true
+  reboot_after_update = false
 
   agent {
     enabled = true
   }
+
+  scsi_hardware = "virtio-scsi-single"
 
   cpu {
     cores = 2
