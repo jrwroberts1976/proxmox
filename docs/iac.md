@@ -485,7 +485,6 @@ For this project:
 
 ## Current next actions
 
-1. Correct the `iothread` / SCSI-controller warning through OpenTofu.
-2. Decide the durable OpenTofu state and recovery model.
-3. Select an off-host backup destination and complete backup/restore proof.
-4. Destroy VM 100 through OpenTofu and rebuild it from Git as the disposable IaC acceptance test.
+1. Decide the durable OpenTofu state and recovery model.
+2. Select an off-host backup destination and complete backup/restore proof.
+3. Destroy VM 100 through OpenTofu and rebuild it from Git as the disposable IaC acceptance test.

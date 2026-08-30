@@ -531,3 +531,24 @@ Post-reboot validation proved:
 - CrowdSec continued consuming the VM Loki source with 3888 source hits and 18 successful SSH parser hits.
 
 The controlled patch workflow and monitored reboot recovery proof are therefore complete.
+
+### VM SCSI controller and IO thread correction
+
+The VM disk used `scsi0` with `iothread = true`, while the provider defaulted the controller to `virtio-scsi-pci`. This caused OpenTofu to warn that IO Thread was not valid for the selected controller.
+
+The VM definition was corrected to use `scsi_hardware = "virtio-scsi-single"` and `reboot_after_update = false`, preserving IO Thread while preventing provider-driven reboots during infrastructure updates.
+
+The reviewed OpenTofu plan contained only two in-place changes and reported `0 to add, 1 to change, 0 to destroy`.
+
+The exact saved plan was applied successfully with `0 added, 1 changed, 0 destroyed`.
+
+Post-apply validation proved:
+
+- the VM boot ID was unchanged, confirming no automatic reboot occurred;
+- OpenTofu state reported `reboot_after_update = false`;
+- OpenTofu state reported `scsi_hardware = "virtio-scsi-single"`;
+- the primary `scsi0` disk retained `iothread = true`;
+- a fresh OpenTofu plan reported no changes;
+- the previous IO Thread/controller warning was no longer present.
+
+The VM storage-controller definition is therefore clean and converged.
