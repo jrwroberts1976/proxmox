@@ -1,0 +1,32 @@
+---
+- name: Baseline Proxmox Debian VM
+  hosts: proxmox_lab
+  become: true
+
+  tasks:
+    - name: Set timezone
+      community.general.timezone:
+        name: Europe/London
+
+    - name: Install baseline packages
+      ansible.builtin.apt:
+        name:
+          - qemu-guest-agent
+          - prometheus-node-exporter
+        state: present
+        update_cache: true
+        install_recommends: false
+
+    - name: Enable QEMU guest agent
+      ansible.builtin.service:
+        name: qemu-guest-agent
+        enabled: true
+        state: started
+      when: not ansible_check_mode
+
+    - name: Enable Prometheus node exporter
+      ansible.builtin.service:
+        name: prometheus-node-exporter
+        enabled: true
+        state: started
+      when: not ansible_check_mode
