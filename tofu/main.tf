@@ -26,7 +26,7 @@ resource "proxmox_virtual_environment_vm" "debian_iac_test" {
   stop_on_destroy = true
 
   agent {
-    enabled = false
+    enabled = true
   }
 
   cpu {
