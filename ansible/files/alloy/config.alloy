@@ -1,0 +1,15 @@
+loki.write "default" {
+	endpoint {
+		url = "http://192.168.2.242:3100/loki/api/v1/push"
+	}
+}
+
+loki.source.journal "system" {
+	labels = {
+		host = "debian-iac-test-01",
+		job  = "systemd-journal",
+		role = "proxmox-vm",
+	}
+
+	forward_to = [loki.write.default.receiver]
+}

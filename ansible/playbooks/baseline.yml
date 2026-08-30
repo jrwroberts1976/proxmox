@@ -8,6 +8,32 @@
       community.general.timezone:
         name: Europe/London
 
+    - name: Install Grafana repository prerequisites
+      ansible.builtin.apt:
+        name:
+          - ca-certificates
+          - gpg
+        state: present
+        update_cache: true
+
+    - name: Ensure APT keyring directory exists
+      ansible.builtin.file:
+        path: /etc/apt/keyrings
+        state: directory
+        mode: "0755"
+
+    - name: Install Grafana APT signing key
+      ansible.builtin.get_url:
+        url: https://apt.grafana.com/gpg-full.key
+        dest: /etc/apt/keyrings/grafana.asc
+        mode: "0644"
+
+    - name: Configure Grafana APT repository
+      ansible.builtin.apt_repository:
+        repo: "deb [signed-by=/etc/apt/keyrings/grafana.asc] https://apt.grafana.com stable main"
+        filename: grafana
+        state: present
+
     - name: Install baseline packages
       ansible.builtin.apt:
         name:
@@ -16,6 +42,41 @@
         state: present
         update_cache: true
         install_recommends: false
+
+    - name: Install Grafana Alloy
+      ansible.builtin.apt:
+        name: alloy
+        state: present
+        update_cache: true
+        install_recommends: false
+      when: not ansible_check_mode
+
+    - name: Grant Alloy journal access
+      ansible.builtin.user:
+        name: alloy
+        groups:
+          - adm
+          - systemd-journal
+        append: true
+      notify: Restart Alloy
+      when: not ansible_check_mode
+
+    - name: Deploy Alloy configuration
+      ansible.builtin.copy:
+        src: ../files/alloy/config.alloy
+        dest: /etc/alloy/config.alloy
+        owner: root
+        group: root
+        mode: "0644"
+      notify: Restart Alloy
+      when: not ansible_check_mode
+
+    - name: Enable Grafana Alloy
+      ansible.builtin.service:
+        name: alloy
+        enabled: true
+        state: started
+      when: not ansible_check_mode
 
     - name: Ensure QEMU guest agent is running
       ansible.builtin.service:
@@ -29,3 +90,9 @@
         enabled: true
         state: started
       when: not ansible_check_mode
+
+  handlers:
+    - name: Restart Alloy
+      ansible.builtin.service:
+        name: alloy
+        state: restarted
