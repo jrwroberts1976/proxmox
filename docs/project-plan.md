@@ -277,9 +277,12 @@ The first VM must be disposable and created from code.
 - [x] Create Debian VM through IaC.
 - [x] Configure CPU/RAM/storage/network through IaC.
 - [x] Bootstrap with cloud-init.
-- [ ] Configure with Ansible. **Control path and sudo/root escalation are proven; baseline apply/idempotence is still open.**
-- [ ] Install node_exporter automatically.
-- [ ] Add it to monitoring.
+- [x] Configure with Ansible and prove idempotence.
+- [x] Install node_exporter automatically.
+- [ ] Register the VM with Prometheus under `linux-hosts`.
+- [ ] Prove the standard Grafana Linux alert baseline covers the VM.
+- [ ] Add Debian security patching policy with automatic reboot disabled.
+- [ ] Add controlled patch/reboot workflow and patch-status monitoring.
 - [ ] Reboot and verify recovery.
 - [ ] Back it up.
 - [ ] Destroy it through IaC.
@@ -300,9 +303,9 @@ Bridge: vmbr0
 IPv4: DHCP (current lease 192.168.2.120)
 ```
 
-OpenTofu creation, zero-drift validation, IaC-controlled first boot, cloud-init, SSH and Ansible ping/become have all passed. The VM currently has a non-fatal `iothread`/SCSI-controller warning that must be corrected through OpenTofu.
+OpenTofu creation, zero-drift validation, IaC-controlled boot, cloud-init, SSH, Ansible baseline, QEMU guest-agent operation and two consecutive `changed=0` Ansible runs have all passed. The VM currently has a non-fatal `iothread`/SCSI-controller warning that must be corrected through OpenTofu.
 
-**Gate:** not yet passed. Disposable VM must still complete baseline configuration, monitoring, reboot, backup/restore and destroy/rebuild proof without manual GUI construction.
+**Gate:** not yet passed. Disposable VM must still complete Prometheus/Grafana monitoring enrollment, patch-management policy, reboot verification, backup/restore and destroy/rebuild proof without manual GUI construction.
 
 ### Phase 8 - Jenkins integration
 

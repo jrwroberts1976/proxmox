@@ -452,15 +452,15 @@ At the current checkpoint the corrected dry-run has started and has shown the in
 Etc/UTC -> Europe/London
 ```
 
-The real baseline has **not yet been applied**. QEMU guest-agent and node_exporter must not be recorded as Ansible-installed until the real apply and idempotence proof pass.
+The real Ansible baseline is now complete. The corrected check-mode run returned `changed=0` and `failed=0`, and two consecutive real runs returned `ok=5`, `changed=0`, `unreachable=0`, `failed=0`. Direct validation confirmed the QEMU guest-agent virtio channel present, `qemu-guest-agent` active, `prometheus-node-exporter` active/enabled, and timezone `Europe/London`.
 
 ### Current next actions
 
-1. Complete the corrected Ansible check-mode run with `failed=0`.
-2. Commit the baseline playbook before applying it.
-3. Apply the baseline and run it a second time to prove idempotence.
-4. Validate QEMU guest-agent and node_exporter from outside the VM.
+1. Register VM 100 with Prometheus under the existing `linux-hosts` job.
+2. Prove the standard Grafana Linux alert baseline covers VM 100.
+3. Add Debian security patching with automatic reboot disabled.
+4. Add controlled patch/reboot automation and patch-status monitoring.
 5. Correct the `iothread` / SCSI-controller warning through OpenTofu.
 6. Decide the durable OpenTofu state/recovery model.
 7. Select off-host backup storage and prove backup/restore.
-8. Destroy VM 100 through OpenTofu and recreate it from Git as the disposable IaC acceptance test.
+8. Destroy VM 100 through OpenTofu and recreate it from Git.

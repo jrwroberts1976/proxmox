@@ -387,9 +387,12 @@ Intended scope:
 
 The first `--check --diff` run exposed a normal Ansible check-mode limitation: package installation is simulated, so the following service task cannot find a service that has not actually been installed. The service tasks were therefore changed to skip when `ansible_check_mode` is true.
 
-As of the current checkpoint, syntax validation passes and the corrected dry-run has begun, but the baseline has **not yet been applied**. Do not record qemu-guest-agent or node_exporter as installed by Ansible until the real apply and idempotence run pass.
+The baseline is now fully proven. The corrected check-mode run completed with `changed=0` and `failed=0`. Two consecutive real Ansible runs then completed with `ok=5`, `changed=0`, `unreachable=0` and `failed=0`, proving idempotence. Direct guest validation also confirmed `qemu-guest-agent` active, the virtio guest-agent channel present, `prometheus-node-exporter` active/enabled, and timezone `Europe/London`. `qemu-guest-agent` is a static systemd service on this Debian image, so Ansible manages `state: started` without requiring `enabled: true`.
+
+The standard Linux VM acceptance baseline also requires Prometheus registration under `linux-hosts`, coverage by the standard Grafana Linux alerts, Debian security patching with automatic reboot disabled, controlled patch/reboot automation, and patch/reboot-status monitoring.
 
 ## Known warning: SCSI iothread
+
 
 VM start emitted:
 
@@ -472,10 +475,10 @@ For this project:
 
 ## Current next actions
 
-1. Complete the corrected Ansible `--check --diff` run with `failed=0`.
-2. Commit the baseline playbook before real guest configuration.
-3. Apply the baseline and prove a second Ansible run is idempotent.
-4. Prove QEMU guest-agent operation and node_exporter reachability.
+1. Register VM 100 with Prometheus under the existing `linux-hosts` job.
+2. Prove the standard Grafana Linux alert baseline covers VM 100.
+3. Add the Debian security-patching policy with automatic reboot disabled.
+4. Add controlled patch/reboot automation and patch-status monitoring.
 5. Correct the `iothread` / SCSI-controller warning through OpenTofu.
 6. Decide the durable OpenTofu state and recovery model.
 7. Select an off-host backup destination and complete backup/restore proof.
