@@ -452,15 +452,22 @@ At the current checkpoint the corrected dry-run has started and has shown the in
 Etc/UTC -> Europe/London
 ```
 
-The real Ansible baseline is now complete. The corrected check-mode run returned `changed=0` and `failed=0`, and two consecutive real runs returned `ok=5`, `changed=0`, `unreachable=0`, `failed=0`. Direct validation confirmed the QEMU guest-agent virtio channel present, `qemu-guest-agent` active, `prometheus-node-exporter` active/enabled, and timezone `Europe/London`.
+The real Ansible baseline is now complete. After Alloy was added, the final real Ansible idempotence run returned `ok=13`, `changed=0`, `unreachable=0`, `failed=0`. Direct validation confirmed the QEMU guest-agent virtio channel present, `qemu-guest-agent` active, `prometheus-node-exporter` active/enabled, Alloy active, and timezone `Europe/London`.
+
+### Monitoring and security checkpoint
+
+VM 100 is now registered with central Prometheus under the existing `linux-hosts` job and has been proven `UP` using node-exporter metrics.
+
+Alloy is installed and managed through Ansible. The VM systemd journal is forwarded to central Loki at `192.168.2.242:3100` with labels including `host="debian-iac-test-01"`, `job="systemd-journal"` and `role="proxmox-vm"`. A generated journal marker and real SSH login were both retrieved successfully from central Loki.
+
+CrowdSec on TestServer now has a Git-tracked Loki acquisition rule for VM 100 pointing at central Loki. End-to-end SSH ingestion was proven with a real login. CrowdSec metrics showed 48 Loki lines read, one successful `sshd-success-logs` parse, and the private-source login correctly handled by the private-network whitelist.
 
 ### Current next actions
 
-1. Register VM 100 with Prometheus under the existing `linux-hosts` job.
-2. Prove the standard Grafana Linux alert baseline covers VM 100.
-3. Add Debian security patching with automatic reboot disabled.
-4. Add controlled patch/reboot automation and patch-status monitoring.
-5. Correct the `iothread` / SCSI-controller warning through OpenTofu.
-6. Decide the durable OpenTofu state/recovery model.
-7. Select off-host backup storage and prove backup/restore.
-8. Destroy VM 100 through OpenTofu and recreate it from Git.
+1. Prove the standard Grafana Linux alert baseline covers VM 100.
+2. Add Debian security patching with automatic reboot disabled.
+3. Add controlled patch/reboot automation and patch-status monitoring.
+4. Correct the `iothread` / SCSI-controller warning through OpenTofu.
+5. Decide the durable OpenTofu state/recovery model.
+6. Select off-host backup storage and prove backup/restore.
+7. Destroy VM 100 through OpenTofu and recreate it from Git.

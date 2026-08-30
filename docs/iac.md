@@ -382,14 +382,18 @@ Intended scope:
 - set guest timezone to `Europe/London`;
 - install `qemu-guest-agent`;
 - install `prometheus-node-exporter`;
+- configure the Grafana APT repository;
+- install and configure Grafana Alloy;
+- forward the systemd journal to central Loki;
 - enable/start QEMU guest agent;
-- enable/start Prometheus node exporter.
+- enable/start Prometheus node exporter;
+- enable/start Alloy.
 
 The first `--check --diff` run exposed a normal Ansible check-mode limitation: package installation is simulated, so the following service task cannot find a service that has not actually been installed. The service tasks were therefore changed to skip when `ansible_check_mode` is true.
 
-The baseline is now fully proven. The corrected check-mode run completed with `changed=0` and `failed=0`. Two consecutive real Ansible runs then completed with `ok=5`, `changed=0`, `unreachable=0` and `failed=0`, proving idempotence. Direct guest validation also confirmed `qemu-guest-agent` active, the virtio guest-agent channel present, `prometheus-node-exporter` active/enabled, and timezone `Europe/London`. `qemu-guest-agent` is a static systemd service on this Debian image, so Ansible manages `state: started` without requiring `enabled: true`.
+The baseline is now fully proven. After the Alloy configuration was added, the final real Ansible idempotence run completed with `ok=13`, `changed=0`, `unreachable=0` and `failed=0`. Direct guest validation confirmed `qemu-guest-agent` active, the virtio guest-agent channel present, `prometheus-node-exporter` active/enabled, Alloy active, and timezone `Europe/London`. `qemu-guest-agent` is a static systemd service on this Debian image, so Ansible manages `state: started` without requiring `enabled: true`.
 
-The standard Linux VM acceptance baseline also requires Prometheus registration under `linux-hosts`, coverage by the standard Grafana Linux alerts, Debian security patching with automatic reboot disabled, controlled patch/reboot automation, and patch/reboot-status monitoring.
+The standard Linux VM acceptance baseline now has Prometheus registration under `linux-hosts`, Alloy journal forwarding to central Loki, and centralized CrowdSec SSH ingestion proven end to end. It still requires coverage by the standard Grafana Linux alerts, Debian security patching with automatic reboot disabled, controlled patch/reboot automation, and patch/reboot-status monitoring.
 
 ## Known warning: SCSI iothread
 
@@ -475,11 +479,10 @@ For this project:
 
 ## Current next actions
 
-1. Register VM 100 with Prometheus under the existing `linux-hosts` job.
-2. Prove the standard Grafana Linux alert baseline covers VM 100.
-3. Add the Debian security-patching policy with automatic reboot disabled.
-4. Add controlled patch/reboot automation and patch-status monitoring.
-5. Correct the `iothread` / SCSI-controller warning through OpenTofu.
-6. Decide the durable OpenTofu state and recovery model.
-7. Select an off-host backup destination and complete backup/restore proof.
-8. Destroy VM 100 through OpenTofu and rebuild it from Git as the disposable IaC acceptance test.
+1. Prove the standard Grafana Linux alert baseline covers VM 100.
+2. Add the Debian security-patching policy with automatic reboot disabled.
+3. Add controlled patch/reboot automation and patch-status monitoring.
+4. Correct the `iothread` / SCSI-controller warning through OpenTofu.
+5. Decide the durable OpenTofu state and recovery model.
+6. Select an off-host backup destination and complete backup/restore proof.
+7. Destroy VM 100 through OpenTofu and rebuild it from Git as the disposable IaC acceptance test.

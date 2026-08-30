@@ -279,7 +279,9 @@ The first VM must be disposable and created from code.
 - [x] Bootstrap with cloud-init.
 - [x] Configure with Ansible and prove idempotence.
 - [x] Install node_exporter automatically.
-- [ ] Register the VM with Prometheus under `linux-hosts`.
+- [x] Register the VM with Prometheus under `linux-hosts`.
+- [x] Forward VM systemd journal logs through Alloy to central Loki and prove end-to-end ingestion.
+- [x] Feed VM SSH events from central Loki into CrowdSec and prove SSH parsing/whitelisting.
 - [ ] Prove the standard Grafana Linux alert baseline covers the VM.
 - [ ] Add Debian security patching policy with automatic reboot disabled.
 - [ ] Add controlled patch/reboot workflow and patch-status monitoring.
@@ -303,9 +305,9 @@ Bridge: vmbr0
 IPv4: DHCP (current lease 192.168.2.120)
 ```
 
-OpenTofu creation, zero-drift validation, IaC-controlled boot, cloud-init, SSH, Ansible baseline, QEMU guest-agent operation and two consecutive `changed=0` Ansible runs have all passed. The VM currently has a non-fatal `iothread`/SCSI-controller warning that must be corrected through OpenTofu.
+OpenTofu creation, zero-drift validation, IaC-controlled boot, cloud-init, SSH, Ansible baseline, QEMU guest-agent operation and repeated idempotence checks have all passed. VM 100 is registered with Prometheus under `linux-hosts`; Alloy forwards its systemd journal to central Loki; and CrowdSec consumes the VM SSH stream from central Loki, with a real SSH login successfully parsed and correctly whitelisted as private-network traffic. The VM currently has a non-fatal `iothread`/SCSI-controller warning that must be corrected through OpenTofu.
 
-**Gate:** not yet passed. Disposable VM must still complete Prometheus/Grafana monitoring enrollment, patch-management policy, reboot verification, backup/restore and destroy/rebuild proof without manual GUI construction.
+**Gate:** not yet passed. Disposable VM must still complete Grafana alert coverage, patch-management policy, controlled patch/reboot monitoring, reboot verification, backup/restore and destroy/rebuild proof without manual GUI construction.
 
 ### Phase 8 - Jenkins integration
 
