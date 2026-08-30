@@ -12,7 +12,6 @@
       ansible.builtin.apt:
         name:
           - ca-certificates
-          - gpg
         state: present
         update_cache: true
 
