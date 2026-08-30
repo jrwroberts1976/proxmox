@@ -4,12 +4,20 @@ loki.write "default" {
 	}
 }
 
+loki.relabel "journal" {
+	forward_to = [loki.write.default.receiver]
+
+	rule {
+		target_label = "job"
+		replacement  = "systemd-journal"
+	}
+}
+
 loki.source.journal "system" {
 	labels = {
 		host = "debian-iac-test-01",
-		job  = "systemd-journal",
 		role = "proxmox-vm",
 	}
 
-	forward_to = [loki.write.default.receiver]
+	forward_to = [loki.relabel.journal.receiver]
 }
