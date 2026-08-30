@@ -1,0 +1,78 @@
+---
+- name: Install unattended upgrades
+  ansible.builtin.apt:
+    name: unattended-upgrades
+    state: present
+    update_cache: true
+    install_recommends: false
+
+- name: Ensure node exporter textfile directory exists
+  ansible.builtin.file:
+    path: /var/lib/prometheus/node-exporter
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Deploy patch status collector
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../files/patching/collect-patch-status.sh"
+    dest: /usr/local/sbin/homelab-collect-patch-status
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Deploy patch status service
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../files/patching/homelab-patch-status.service"
+    dest: /etc/systemd/system/homelab-patch-status.service
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Reload systemd
+
+- name: Deploy patch status timer
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../files/patching/homelab-patch-status.timer"
+    dest: /etc/systemd/system/homelab-patch-status.timer
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Reload systemd
+
+- name: Configure security-only unattended upgrades
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../files/patching/52homelab-unattended-upgrades"
+    dest: /etc/apt/apt.conf.d/52homelab-unattended-upgrades
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Apply systemd unit changes
+  ansible.builtin.meta: flush_handlers
+
+- name: Enable unattended upgrades
+  ansible.builtin.service:
+    name: unattended-upgrades
+    enabled: true
+    state: started
+
+- name: Enable patch status timer
+  ansible.builtin.systemd_service:
+    name: homelab-patch-status.timer
+    enabled: true
+    state: started
+  when: not ansible_check_mode
+
+- name: Check for existing patch metrics
+  ansible.builtin.stat:
+    path: /var/lib/prometheus/node-exporter/patch_status.prom
+  register: patch_status_metrics
+
+- name: Seed initial patch status metrics
+  ansible.builtin.systemd_service:
+    name: homelab-patch-status.service
+    state: started
+  when:
+    - not ansible_check_mode
+    - not patch_status_metrics.stat.exists

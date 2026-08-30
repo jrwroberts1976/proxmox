@@ -1,0 +1,10 @@
+[Unit]
+Description=Collect homelab patch status hourly
+
+[Timer]
+OnBootSec=2min
+OnCalendar=*-*-* *:15:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

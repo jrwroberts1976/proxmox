@@ -97,7 +97,15 @@
         state: started
       when: not ansible_check_mode
 
+    - name: Configure patch management baseline
+      ansible.builtin.include_tasks: ../tasks/patching.yml
+
   handlers:
+    - name: Reload systemd
+      ansible.builtin.systemd_service:
+        daemon_reload: true
+      when: not ansible_check_mode
+
     - name: Restart Alloy
       ansible.builtin.service:
         name: alloy
