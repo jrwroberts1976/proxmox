@@ -17,10 +17,9 @@
         update_cache: true
         install_recommends: false
 
-    - name: Enable QEMU guest agent
+    - name: Ensure QEMU guest agent is running
       ansible.builtin.service:
         name: qemu-guest-agent
-        enabled: true
         state: started
       when: not ansible_check_mode
 
