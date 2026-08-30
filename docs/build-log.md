@@ -471,3 +471,63 @@ CrowdSec on TestServer now has a Git-tracked Loki acquisition rule for VM 100 po
 5. Decide the durable OpenTofu state/recovery model.
 6. Select off-host backup storage and prove backup/restore.
 7. Destroy VM 100 through OpenTofu and recreate it from Git.
+
+### Debian patch-management baseline
+
+VM 100 now has an Ansible-managed Debian patch-management baseline.
+
+Implemented controls:
+
+- `unattended-upgrades` installed, enabled and active;
+- automatic installation restricted to Debian security repositories;
+- `Unattended-Upgrade::Automatic-Reboot "false"` explicitly enforced;
+- root-owned patch collector deployed through Ansible;
+- systemd oneshot service and hourly timer deployed through Ansible;
+- node-exporter textfile metrics written to `patch_status.prom`.
+
+The collector exports seven metrics:
+
+- `homelab_updates_available`
+- `homelab_security_updates_available`
+- `homelab_reboot_required`
+- `homelab_unattended_upgrades_enabled`
+- `homelab_unattended_upgrades_active`
+- `homelab_patch_last_success_timestamp_seconds`
+- `homelab_patch_check_timestamp_seconds`
+
+All seven metrics were proven locally through node-exporter and centrally through Prometheus for `host="debian-iac-test-01"`.
+
+At validation time the VM reported zero pending updates, zero security updates and no reboot requirement.
+
+Live Grafana coverage was verified. The standard Linux availability, CPU, memory and root-filesystem rules use `job="linux-hosts"` and therefore cover VM 100.
+
+Patch-specific live rules were also confirmed:
+
+- `Patch collector stale`: collector age greater than 7200 seconds.
+- `Security updates available`: `homelab_security_updates_available{job="linux-hosts"} > 0`.
+
+The final Ansible idempotence run completed with `changed=0`, `unreachable=0`, `failed=0`.
+
+Patch-status monitoring and the security-only/no-auto-reboot policy are complete. The controlled patch/reboot workflow is implemented in `ansible/playbooks/patch.yml`; the controlled workflow is now proven through an approved patch cycle and monitored reboot/recovery test.
+
+### Controlled patch and reboot proof
+
+The committed `ansible/playbooks/patch.yml` workflow was first exercised with `patch_apply=false` and `patch_reboot=false`. Package application and reboot were correctly skipped and all baseline services remained healthy.
+
+An approved patch cycle was then run with `patch_apply=true` and `patch_reboot=false`. It completed with `failed=0` and `unreachable=0`, while the reboot path remained disabled.
+
+VM 100 was subsequently rebooted deliberately and returned successfully.
+
+Post-reboot validation proved:
+
+- SSH connectivity restored;
+- QEMU guest agent active;
+- Prometheus node exporter active;
+- Alloy active;
+- patch-status timer active;
+- Prometheus reported the VM `UP` under `linux-hosts`;
+- all seven patch-status metrics were available;
+- Loki returned 1421 VM journal entries during the validation window;
+- CrowdSec continued consuming the VM Loki source with 3888 source hits and 18 successful SSH parser hits.
+
+The controlled patch workflow and monitored reboot recovery proof are therefore complete.

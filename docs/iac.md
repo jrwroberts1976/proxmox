@@ -393,7 +393,13 @@ The first `--check --diff` run exposed a normal Ansible check-mode limitation: p
 
 The baseline is now fully proven. After the Alloy configuration was added, the final real Ansible idempotence run completed with `ok=13`, `changed=0`, `unreachable=0` and `failed=0`. Direct guest validation confirmed `qemu-guest-agent` active, the virtio guest-agent channel present, `prometheus-node-exporter` active/enabled, Alloy active, and timezone `Europe/London`. `qemu-guest-agent` is a static systemd service on this Debian image, so Ansible manages `state: started` without requiring `enabled: true`.
 
-The standard Linux VM acceptance baseline now has Prometheus registration under `linux-hosts`, Alloy journal forwarding to central Loki, and centralized CrowdSec SSH ingestion proven end to end. It still requires coverage by the standard Grafana Linux alerts, Debian security patching with automatic reboot disabled, controlled patch/reboot automation, and patch/reboot-status monitoring.
+The standard Linux VM acceptance baseline now has Prometheus registration under `linux-hosts`, Alloy journal forwarding to central Loki, centralized CrowdSec SSH ingestion, standard Grafana Linux alert coverage, Debian security-only unattended upgrades with automatic reboot disabled, and patch-status monitoring proven end to end.
+
+Patch status is collected hourly by an Ansible-managed systemd service/timer and exported through node-exporter's textfile collector. The metric contract includes pending updates, security updates, reboot-required state, unattended-upgrades enabled/active state, last successful unattended-upgrades timestamp, and collector timestamp. Prometheus receives these metrics under `job="linux-hosts"`.
+
+Live Grafana rules cover the VM generically through the same job label. `Patch collector stale` triggers when collector age exceeds 7200 seconds, while `Security updates available` evaluates `homelab_security_updates_available{job="linux-hosts"} > 0`.
+
+The remaining patch-management work is the controlled patch/reboot workflow itself.
 
 ## Known warning: SCSI iothread
 
@@ -479,10 +485,7 @@ For this project:
 
 ## Current next actions
 
-1. Prove the standard Grafana Linux alert baseline covers VM 100.
-2. Add the Debian security-patching policy with automatic reboot disabled.
-3. Add controlled patch/reboot automation and patch-status monitoring.
-4. Correct the `iothread` / SCSI-controller warning through OpenTofu.
-5. Decide the durable OpenTofu state and recovery model.
-6. Select an off-host backup destination and complete backup/restore proof.
-7. Destroy VM 100 through OpenTofu and rebuild it from Git as the disposable IaC acceptance test.
+1. Correct the `iothread` / SCSI-controller warning through OpenTofu.
+2. Decide the durable OpenTofu state and recovery model.
+3. Select an off-host backup destination and complete backup/restore proof.
+4. Destroy VM 100 through OpenTofu and rebuild it from Git as the disposable IaC acceptance test.
