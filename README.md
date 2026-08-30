@@ -2,7 +2,7 @@
 
 This repository tracks the build, configuration, migration, and operational runbooks for the Proxmox homelab platform.
 
-**Project status:** host bootstrap is complete and hardware/storage preparation is active. No production workloads have been migrated. New infrastructure will be built Infrastructure-as-Code first.
+**Project status:** host bootstrap is complete, the manual OpenTofu/Ansible control path is proven, and the disposable Debian IaC VM proof is in progress. No production workloads have been migrated.
 
 ## Hardware
 
@@ -41,6 +41,10 @@ This repository tracks the build, configuration, migration, and operational runb
 | Repository | `pve-no-subscription` enabled |
 | Enterprise repositories | PVE and Ceph Enterprise disabled |
 | node_exporter | 1.9.0-1+b4 on port 9100 |
+| OpenTofu control node | TestServer, OpenTofu 1.12.6 linux_arm64 |
+| Proxmox provider | `bpg/proxmox` 0.111.1, lock file committed |
+| IaC API identity | `iac@pve`, scoped roles/ACLs; token material outside Git |
+| Disposable proof VM | VM 100 `debian-iac-test-01`, Debian 13, 2 vCPU, 2 GiB RAM, 24 GiB disk |
 | Headless operation | Reboot and remote-management test passed |
 
 ## Build status
@@ -63,14 +67,21 @@ This repository tracks the build, configuration, migration, and operational runb
 - [x] Kingston 480 GB SATA SSD physically installed and detected
 - [x] Kingston SSD SMART baseline captured
 - [x] Kingston SSD extended SMART self-test passed
+- [x] Select OpenTofu and pin the Proxmox provider
+- [x] Create scoped IaC API identity and keep token material outside Git
+- [x] Create disposable Debian VM 100 through OpenTofu
+- [x] Prove cloud-init, DHCP, SSH and Ansible control path
+- [x] Prove zero OpenTofu drift after VM creation
+- [ ] Complete and idempotence-test the Ansible baseline
+- [ ] Correct the VM SCSI/iothread warning through OpenTofu
+- [ ] Decide durable OpenTofu state/recovery model
 - [ ] Wipe legacy NTFS filesystem from Kingston SSD
 - [ ] Provision Kingston SSD as dedicated Proxmox VM/LXC storage
 - [ ] Review/update HP BIOS firmware
 - [ ] Add Proxmox target to central Prometheus/Grafana
 - [ ] Host security baseline
 - [ ] Backup destination and restore test
-- [ ] IaC foundation
-- [ ] Disposable IaC Debian VM proof
+- [ ] Destroy/rebuild disposable VM entirely from Git/IaC
 - [ ] Jenkins IaC integration
 - [ ] Production workload migration
 
@@ -99,5 +110,6 @@ Planned workloads include a Debian Docker VM, Home Assistant OS VM, and future t
 ## Documentation
 
 - [`docs/project-plan.md`](docs/project-plan.md) — full project plan, IaC model, Jenkins integration, migration gates, DNS resilience, backup/DR and acceptance criteria.
+- [`docs/iac.md`](docs/iac.md) — working OpenTofu/Proxmox/Ansible architecture, API permissions, secret/state handling, disposable VM proof and manual runbook.
 - [`docs/installation.md`](docs/installation.md) — physical host installation, repository setup, networking, validation commands, SMART/thermal/virtualisation baselines and post-install gates.
 - [`docs/build-log.md`](docs/build-log.md) — chronological implementation record of changes performed on the live host.
