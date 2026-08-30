@@ -1,0 +1,109 @@
+---
+- name: Controlled patch and reboot Proxmox Debian VM
+  hosts: proxmox_lab
+  become: true
+  gather_facts: true
+
+  vars:
+    patch_apply: false
+    patch_reboot: false
+
+  tasks:
+    - name: Validate patch control flags
+      ansible.builtin.assert:
+        that:
+          - not (patch_reboot | bool) or (patch_apply | bool)
+        fail_msg: patch_reboot=true requires patch_apply=true.
+        success_msg: Patch control flags are valid.
+
+    - name: Refresh APT package metadata
+      ansible.builtin.apt:
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: Report pending package updates
+      ansible.builtin.shell: |
+        apt list --upgradable 2>/dev/null | tail -n +2
+      args:
+        executable: /bin/bash
+      register: pending_updates
+      changed_when: false
+
+    - name: Show pending package updates
+      ansible.builtin.debug:
+        var: pending_updates.stdout_lines
+
+    - name: Apply controlled package updates
+      ansible.builtin.apt:
+        upgrade: "yes"
+        update_cache: true
+        cache_valid_time: 3600
+      when: patch_apply | bool
+
+    - name: Report updates remaining after controlled patch
+      ansible.builtin.shell: |
+        apt list --upgradable 2>/dev/null | tail -n +2
+      args:
+        executable: /bin/bash
+      register: remaining_updates
+      changed_when: false
+      when: patch_apply | bool
+
+    - name: Show updates remaining after controlled patch
+      ansible.builtin.debug:
+        var: remaining_updates.stdout_lines
+      when: patch_apply | bool
+
+    - name: Check whether reboot is required
+      ansible.builtin.stat:
+        path: /run/reboot-required
+      register: reboot_required
+
+    - name: Report reboot decision
+      ansible.builtin.debug:
+        msg: >-
+          reboot_required={{ reboot_required.stat.exists }}
+          patch_apply={{ patch_apply | bool }}
+          patch_reboot={{ patch_reboot | bool }}
+
+    - name: Reboot only when explicitly approved
+      ansible.builtin.reboot:
+        reboot_timeout: 600
+        post_reboot_delay: 10
+      when:
+        - patch_apply | bool
+        - patch_reboot | bool
+        - reboot_required.stat.exists
+
+    - name: Wait for SSH after approved reboot
+      ansible.builtin.wait_for_connection:
+        timeout: 300
+        sleep: 5
+      when:
+        - patch_apply | bool
+        - patch_reboot | bool
+        - reboot_required.stat.exists
+
+    - name: Refresh patch status metrics
+      ansible.builtin.systemd_service:
+        name: homelab-patch-status.service
+        state: started
+
+    - name: Collect service facts
+      ansible.builtin.service_facts:
+
+    - name: Check patch status timer
+      ansible.builtin.command:
+        cmd: systemctl is-active homelab-patch-status.timer
+      register: patch_status_timer
+      changed_when: false
+
+    - name: Verify baseline services
+      ansible.builtin.assert:
+        that:
+          - ansible_facts.services['qemu-guest-agent.service'].state == 'running'
+          - ansible_facts.services['prometheus-node-exporter.service'].state == 'running'
+          - ansible_facts.services['alloy.service'].state == 'running'
+          - patch_status_timer.stdout == 'active'
+        fail_msg: One or more baseline services are not running.
+        success_msg: Baseline services are running.
