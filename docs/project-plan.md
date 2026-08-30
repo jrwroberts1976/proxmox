@@ -8,9 +8,9 @@ The project must improve capability without making DNS, security monitoring, or 
 
 ## 2. Project status
 
-**Current state:** platform bootstrap complete and project paused until the Jenkins work is finished.
+**Current state:** platform bootstrap is complete, the manual OpenTofu/Ansible control path is proven, and the disposable IaC VM proof is in progress.
 
-The Proxmox host is installed, patched, running headlessly, and has passed initial hardware, network, storage, virtualisation, and time-sync checks. No production workloads have been migrated.
+The Proxmox host is installed, patched, running headlessly, and has passed initial hardware, network, storage, virtualisation, and time-sync checks. OpenTofu has created and booted the first disposable Debian 13 VM from Git, cloud-init/SSH have been proven, and Ansible connectivity plus sudo/root escalation have passed. No production workloads have been migrated.
 
 ## 3. Target platform
 
@@ -83,7 +83,7 @@ The intended build chain is:
 ```text
 Git
  |
- +--> OpenTofu / Terraform
+ +--> OpenTofu
  |      +--> Proxmox VMs, CPU, RAM, disks, NICs, cloud-init
  |
  +--> cloud-init
@@ -99,7 +99,9 @@ Git
         +--> validate, plan, test and deploy the above
 ```
 
-### Proposed repository structure
+The manual OpenTofu -> Proxmox -> cloud-init -> SSH -> Ansible control path has now been proven with disposable VM 100. See [`iac.md`](iac.md) for the working runbook and security model.
+
+### Repository structure
 
 ```text
 proxmox/
@@ -108,13 +110,15 @@ proxmox/
 │   ├── installation.md
 │   ├── project-plan.md
 │   ├── build-log.md
+│   ├── iac.md
 │   ├── architecture.md
 │   ├── backup-recovery.md
 │   └── migration-runbook.md
-├── tofu/                  # or terraform/ once provider choice is final
+├── tofu/
+│   ├── versions.tf
 │   ├── providers.tf
 │   ├── variables.tf
-│   ├── outputs.tf
+│   ├── main.tf
 │   ├── modules/
 │   └── environments/
 ├── cloud-init/
@@ -141,8 +145,8 @@ Git push / pull request
      Jenkins
         |
         +--> formatting / linting
-        +--> OpenTofu/Terraform validate
-        +--> OpenTofu/Terraform plan
+        +--> OpenTofu validate
+        +--> OpenTofu plan
         +--> Ansible syntax/lint checks
         +--> optional security checks
         +--> controlled apply/deploy
@@ -248,32 +252,32 @@ No production VM should be created until a backup destination has been selected.
 
 ### Phase 6 - IaC foundation
 
-- [ ] Choose OpenTofu or Terraform as the primary declarative tool.
-- [ ] Choose and pin the Proxmox provider version.
-- [ ] Create a least-privilege Proxmox API user/token for IaC.
-- [ ] Keep token material outside Git.
-- [ ] Add `.gitignore` for state, secrets, local variables and credentials.
-- [ ] Decide state-storage approach.
+- [x] Choose OpenTofu as the primary declarative tool.
+- [x] Choose and pin `bpg/proxmox` provider version `0.111.1`.
+- [x] Create a least-privilege Proxmox API user/token for IaC.
+- [x] Keep token material outside Git.
+- [x] Add `.gitignore` for state, secrets, local variables and credentials.
+- [ ] Decide durable state-storage/recovery approach.
 - [ ] Define naming convention for VMs.
 - [ ] Define VM ID allocation approach.
-- [ ] Define IP-address allocation approach.
+- [ ] Define production IP-address allocation approach.
 - [ ] Create reusable VM module.
-- [ ] Create cloud-init template workflow.
-- [ ] Create Ansible inventory structure.
+- [x] Create and prove the initial cloud-init workflow with the disposable Debian VM.
+- [x] Create Ansible inventory structure and prove SSH connectivity.
 - [ ] Create base Linux role for packages, users, SSH, time, monitoring and hardening.
 - [ ] Add formatting/linting/validation scripts.
-- [ ] Document manual IaC workflow before Jenkins automation is added.
+- [x] Document the manual IaC workflow before Jenkins automation is added.
 
-**Gate:** `plan` is reproducible and no credentials or state secrets are committed to Git.
+**Current Phase 6 result:** the core manual path is operational and reproducible, API secrets/state are excluded from Git, and a zero-drift plan has been proven. The phase remains open until the durable state model, reusable module/base role and remaining operational conventions are completed.
 
 ### Phase 7 - Disposable IaC VM proof
 
 The first VM must be disposable and created from code.
 
-- [ ] Create Debian VM through IaC.
-- [ ] Configure CPU/RAM/storage/network through IaC.
-- [ ] Bootstrap with cloud-init.
-- [ ] Configure with Ansible.
+- [x] Create Debian VM through IaC.
+- [x] Configure CPU/RAM/storage/network through IaC.
+- [x] Bootstrap with cloud-init.
+- [ ] Configure with Ansible. **Control path and sudo/root escalation are proven; baseline apply/idempotence is still open.**
 - [ ] Install node_exporter automatically.
 - [ ] Add it to monitoring.
 - [ ] Reboot and verify recovery.
@@ -283,15 +287,30 @@ The first VM must be disposable and created from code.
 - [ ] Confirm the rebuilt host is functionally equivalent.
 - [ ] Restore a backup as a separate recovery proof.
 
-**Gate:** disposable VM can be destroyed and rebuilt from repository state without manual GUI construction.
+Current proof VM:
+
+```text
+VM ID: 100
+Name: debian-iac-test-01
+OS: Debian 13 trixie
+CPU: 2 cores
+RAM: 2048 MiB
+Disk: 24 GiB local-lvm
+Bridge: vmbr0
+IPv4: DHCP (current lease 192.168.2.120)
+```
+
+OpenTofu creation, zero-drift validation, IaC-controlled first boot, cloud-init, SSH and Ansible ping/become have all passed. The VM currently has a non-fatal `iothread`/SCSI-controller warning that must be corrected through OpenTofu.
+
+**Gate:** not yet passed. Disposable VM must still complete baseline configuration, monitoring, reboot, backup/restore and destroy/rebuild proof without manual GUI construction.
 
 ### Phase 8 - Jenkins integration
 
-Start this only after the Jenkins delivery-lab work is complete and the manual IaC workflow is proven.
+Start this only after the manual IaC workflow is proven.
 
 - [ ] Add IaC validation pipeline.
 - [ ] Run formatting checks.
-- [ ] Run OpenTofu/Terraform validation.
+- [ ] Run OpenTofu validation.
 - [ ] Generate plans on pull requests/controlled builds.
 - [ ] Run Ansible syntax/lint checks.
 - [ ] Add security/static checks where useful.
