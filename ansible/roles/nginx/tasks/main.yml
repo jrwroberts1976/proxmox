@@ -1,0 +1,60 @@
+---
+- name: Verify Nginx role platform
+  ansible.builtin.assert:
+    that:
+      - ansible_os_family == 'Debian'
+    fail_msg: "The Nginx role currently supports Debian-family guests only."
+
+- name: Install Nginx
+  ansible.builtin.apt:
+    name: "{{ nginx_packages }}"
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Remove default Nginx site
+  ansible.builtin.file:
+    path: /etc/nginx/sites-enabled/default
+    state: absent
+  when: nginx_remove_default_site | bool
+  register: nginx_default_site
+
+- name: Render Nginx sites
+  ansible.builtin.template:
+    src: site.conf.j2
+    dest: "/etc/nginx/sites-available/{{ item.name }}.conf"
+    owner: root
+    group: root
+    mode: "0644"
+  loop: "{{ nginx_sites }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: nginx_site_configs
+
+- name: Enable Nginx sites
+  ansible.builtin.file:
+    src: "/etc/nginx/sites-available/{{ item.name }}.conf"
+    dest: "/etc/nginx/sites-enabled/{{ item.name }}.conf"
+    state: link
+  loop: "{{ nginx_sites }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: nginx_enabled_sites
+
+- name: Validate Nginx configuration
+  ansible.builtin.command:
+    cmd: nginx -t
+  changed_when: false
+
+- name: Reload Nginx after configuration changes
+  ansible.builtin.service:
+    name: "{{ nginx_service_name }}"
+    state: reloaded
+    enabled: true
+  when: nginx_default_site.changed or nginx_site_configs.changed or nginx_enabled_sites.changed
+
+- name: Ensure Nginx is enabled and running
+  ansible.builtin.service:
+    name: "{{ nginx_service_name }}"
+    state: started
+    enabled: true

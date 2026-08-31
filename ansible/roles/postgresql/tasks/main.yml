@@ -1,0 +1,80 @@
+---
+- name: Verify PostgreSQL role platform
+  ansible.builtin.assert:
+    that:
+      - ansible_os_family == 'Debian'
+    fail_msg: "The PostgreSQL role currently supports Debian-family guests only."
+
+- name: Install PostgreSQL packages
+  ansible.builtin.apt:
+    name: "{{ postgresql_packages }}"
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Ensure PostgreSQL configuration include directory exists
+  ansible.builtin.file:
+    path: "/etc/postgresql/{{ postgresql_version }}/main/conf.d"
+    state: directory
+    owner: postgres
+    group: postgres
+    mode: "0755"
+
+- name: Configure homelab PostgreSQL baseline
+  ansible.builtin.copy:
+    dest: "/etc/postgresql/{{ postgresql_version }}/main/conf.d/99-homelab.conf"
+    owner: postgres
+    group: postgres
+    mode: "0644"
+    content: |
+      # Managed by Ansible.
+      listen_addresses = '{{ postgresql_listen_addresses }}'
+      port = {{ postgresql_port }}
+      password_encryption = 'scram-sha-256'
+  register: postgresql_config
+
+- name: Add managed PostgreSQL HBA rules
+  ansible.builtin.blockinfile:
+    path: "/etc/postgresql/{{ postgresql_version }}/main/pg_hba.conf"
+    marker: "# {mark} ANSIBLE HOMELAB RULES"
+    block: |
+      {% for rule in postgresql_hba_rules %}
+      {{ rule }}
+      {% endfor %}
+  register: postgresql_hba
+
+- name: Restart PostgreSQL when configuration changes
+  ansible.builtin.service:
+    name: "{{ postgresql_service_name }}"
+    state: restarted
+    enabled: true
+  when: postgresql_config.changed or postgresql_hba.changed
+
+- name: Ensure PostgreSQL is enabled and running
+  ansible.builtin.service:
+    name: "{{ postgresql_service_name }}"
+    state: started
+    enabled: true
+
+- name: Create PostgreSQL roles
+  community.postgresql.postgresql_user:
+    name: "{{ item.name }}"
+    password: "{{ item.password | default(omit) }}"
+    role_attr_flags: "{{ item.role_attr_flags | default('LOGIN') }}"
+    state: present
+  become_user: postgres
+  loop: "{{ postgresql_users }}"
+  loop_control:
+    label: "{{ item.name }}"
+  no_log: true
+
+- name: Create PostgreSQL databases
+  community.postgresql.postgresql_db:
+    name: "{{ item.name }}"
+    owner: "{{ item.owner | default(omit) }}"
+    encoding: "{{ item.encoding | default('UTF8') }}"
+    state: present
+  become_user: postgres
+  loop: "{{ postgresql_databases }}"
+  loop_control:
+    label: "{{ item.name }}"

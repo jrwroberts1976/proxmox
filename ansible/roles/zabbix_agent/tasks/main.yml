@@ -1,0 +1,71 @@
+---
+- name: Verify Zabbix agent role inputs
+  ansible.builtin.assert:
+    that:
+      - ansible_distribution == 'Debian'
+      - ansible_distribution_major_version | int >= 13
+      - zabbix_server_address is defined
+      - (zabbix_server_address | default('') | length) > 0
+    fail_msg: "Zabbix Agent 2 currently targets Debian 13+ and requires zabbix_server_address."
+
+- name: Download official Zabbix repository package
+  ansible.builtin.get_url:
+    url: "https://repo.zabbix.com/zabbix/{{ zabbix_version }}/debian/pool/main/z/zabbix-release/zabbix-release_latest_{{ zabbix_version }}+debian{{ ansible_distribution_major_version }}_all.deb"
+    dest: "/tmp/zabbix-release-{{ zabbix_version }}-debian{{ ansible_distribution_major_version }}.deb"
+    mode: "0644"
+
+- name: Install official Zabbix repository package
+  ansible.builtin.apt:
+    deb: "/tmp/zabbix-release-{{ zabbix_version }}-debian{{ ansible_distribution_major_version }}.deb"
+    state: present
+
+- name: Install Zabbix Agent 2
+  ansible.builtin.apt:
+    name: "{{ zabbix_agent_package }}"
+    state: present
+    update_cache: true
+
+- name: Configure passive Zabbix server
+  ansible.builtin.lineinfile:
+    path: /etc/zabbix/zabbix_agent2.conf
+    regexp: '^Server='
+    line: "Server={{ zabbix_server_address }}"
+  register: zabbix_agent_server_config
+
+- name: Configure active Zabbix server
+  ansible.builtin.lineinfile:
+    path: /etc/zabbix/zabbix_agent2.conf
+    regexp: '^ServerActive='
+    line: "ServerActive={{ zabbix_agent_server_active }}"
+  register: zabbix_agent_active_config
+
+- name: Configure Zabbix agent hostname
+  ansible.builtin.lineinfile:
+    path: /etc/zabbix/zabbix_agent2.conf
+    regexp: '^Hostname='
+    line: "Hostname={{ zabbix_agent_hostname }}"
+  register: zabbix_agent_hostname_config
+
+- name: Configure Zabbix agent listen port
+  ansible.builtin.lineinfile:
+    path: /etc/zabbix/zabbix_agent2.conf
+    regexp: '^#?ListenPort='
+    line: "ListenPort={{ zabbix_agent_port }}"
+  register: zabbix_agent_port_config
+
+- name: Restart Zabbix Agent 2 after configuration changes
+  ansible.builtin.service:
+    name: "{{ zabbix_agent_service_name }}"
+    state: restarted
+    enabled: true
+  when: >-
+    zabbix_agent_server_config.changed or
+    zabbix_agent_active_config.changed or
+    zabbix_agent_hostname_config.changed or
+    zabbix_agent_port_config.changed
+
+- name: Ensure Zabbix Agent 2 is enabled and running
+  ansible.builtin.service:
+    name: "{{ zabbix_agent_service_name }}"
+    state: started
+    enabled: true
