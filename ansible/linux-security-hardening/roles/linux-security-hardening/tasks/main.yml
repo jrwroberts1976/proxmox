@@ -1,0 +1,107 @@
+---
+- name: Confirm supported Debian-family host
+  ansible.builtin.assert:
+    that:
+      - ansible_os_family == 'Debian'
+    fail_msg: >-
+      This role was validated only on Debian 13 and a Debian-based Proxmox VE host.
+
+- name: Check required binaries
+  ansible.builtin.stat:
+    path: "{{ item }}"
+  loop:
+    - "{{ linux_security_hardening_sshd_binary }}"
+    - "{{ linux_security_hardening_iptables_binary }}"
+  register: linux_security_hardening_binary_stats
+
+- name: Require SSH and iptables tooling
+  ansible.builtin.assert:
+    that:
+      - item.stat.exists
+      - item.stat.executable
+    fail_msg: "Required executable is missing: {{ item.item }}"
+  loop: "{{ linux_security_hardening_binary_stats.results }}"
+
+- name: Ensure OpenSSH drop-in directory exists
+  ansible.builtin.file:
+    path: /etc/ssh/sshd_config.d
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+  when: linux_security_hardening_manage_ssh_macs
+
+- name: Install validated OpenSSH MAC hardening
+  ansible.builtin.template:
+    src: 90-homelab-macs.conf.j2
+    dest: "{{ linux_security_hardening_ssh_dropin }}"
+    owner: root
+    group: root
+    mode: '0644'
+  when: linux_security_hardening_manage_ssh_macs
+  notify: Reload SSH
+
+- name: Validate effective OpenSSH configuration before reload
+  ansible.builtin.command:
+    argv:
+      - "{{ linux_security_hardening_sshd_binary }}"
+      - -t
+  changed_when: false
+  when: linux_security_hardening_manage_ssh_macs
+
+- name: Apply pending SSH reload after validation
+  ansible.builtin.meta: flush_handlers
+
+- name: Read effective OpenSSH MAC policy
+  ansible.builtin.command:
+    argv:
+      - "{{ linux_security_hardening_sshd_binary }}"
+      - -T
+  register: linux_security_hardening_sshd_effective
+  changed_when: false
+  when: linux_security_hardening_manage_ssh_macs
+
+- name: Verify weak 64-bit UMAC algorithms are absent
+  ansible.builtin.assert:
+    that:
+      - "'umac-64-etm@openssh.com' not in linux_security_hardening_sshd_effective.stdout"
+      - "'umac-64@openssh.com' not in linux_security_hardening_sshd_effective.stdout"
+    fail_msg: Weak UMAC-64 algorithms remain in the effective SSH configuration.
+  when: linux_security_hardening_manage_ssh_macs
+
+- name: Install persistent ICMP timestamp block service
+  ansible.builtin.template:
+    src: homelab-icmp-timestamp-block.service.j2
+    dest: "{{ linux_security_hardening_icmp_unit }}"
+    owner: root
+    group: root
+    mode: '0644'
+  when: linux_security_hardening_block_icmp_timestamp
+  notify:
+    - Reload systemd
+    - Restart ICMP timestamp block
+
+- name: Apply pending systemd handlers
+  ansible.builtin.meta: flush_handlers
+
+- name: Ensure ICMP timestamp block is enabled and active
+  ansible.builtin.systemd:
+    name: homelab-icmp-timestamp-block.service
+    enabled: true
+    state: started
+  when: linux_security_hardening_block_icmp_timestamp
+
+- name: Verify ICMP timestamp DROP rule is present
+  ansible.builtin.command:
+    argv:
+      - "{{ linux_security_hardening_iptables_binary }}"
+      - -C
+      - INPUT
+      - -p
+      - icmp
+      - --icmp-type
+      - timestamp-request
+      - -j
+      - DROP
+  changed_when: false
+  when: linux_security_hardening_block_icmp_timestamp
