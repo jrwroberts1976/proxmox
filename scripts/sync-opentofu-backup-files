@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+MANIFEST="/home/james/projects/proxmox/backup/testserver-opentofu-state-files.txt"
+TARGET="/home/homelab-backup/scripts/testserver-files.txt"
+
+if [[ ! -r "$MANIFEST" ]]; then
+  echo "FAIL: manifest not readable: $MANIFEST" >&2
+  exit 1
+fi
+
+if ! sudo test -f "$TARGET"; then
+  echo "FAIL: backup include file missing: $TARGET" >&2
+  exit 1
+fi
+
+while IFS= read -r pathname
+do
+  [[ -n "$pathname" ]] || continue
+
+  if sudo grep -Fxq "$pathname" "$TARGET"; then
+    echo "PRESENT: $pathname"
+  else
+    printf '%s\n' "$pathname" | sudo tee -a "$TARGET" >/dev/null
+    echo "ADDED: $pathname"
+  fi
+done < "$MANIFEST"

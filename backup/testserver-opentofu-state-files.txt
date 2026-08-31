@@ -1,0 +1,2 @@
+/home/james/projects/proxmox/tofu/terraform.tfstate
+/home/james/projects/proxmox/tofu/terraform.tfstate.backup

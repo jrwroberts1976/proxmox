@@ -552,3 +552,20 @@ Post-apply validation proved:
 - the previous IO Thread/controller warning was no longer present.
 
 The VM storage-controller definition is therefore clean and converged.
+
+### Off-host OpenTofu state backup and recovery proof
+
+The existing `homelab-backup-testserver` Restic workflow was extended to include:
+
+- `/home/james/projects/proxmox/tofu/terraform.tfstate`
+- `/home/james/projects/proxmox/tofu/terraform.tfstate.backup`
+
+The Restic repository is hosted off TestServer at `192.168.2.242:8000`.
+
+A controlled backup completed successfully and created snapshot `0b972b50`.
+
+Both OpenTofu state files were restored from that snapshot into an isolated temporary directory.
+
+SHA-256 and byte-for-byte comparisons proved that both restored files were identical to their live counterparts.
+
+The off-host OpenTofu state recovery prerequisite for destructive IaC testing is therefore proven.
