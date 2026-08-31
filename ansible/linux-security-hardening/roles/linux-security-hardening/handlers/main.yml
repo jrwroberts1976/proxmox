@@ -1,0 +1,14 @@
+---
+- name: Reload SSH
+  ansible.builtin.service:
+    name: "{{ linux_security_hardening_ssh_service }}"
+    state: reloaded
+
+- name: Reload systemd
+  ansible.builtin.systemd:
+    daemon_reload: true
+
+- name: Restart ICMP timestamp block
+  ansible.builtin.systemd:
+    name: homelab-icmp-timestamp-block.service
+    state: restarted
