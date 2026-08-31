@@ -20,7 +20,7 @@ Grafana
 
 The objective is to make Linux monitoring repeatable, testable, and suitable for later automation through Ansible.
 
-This procedure is intended for Debian-family Linux systems used in the Proxmox homelab. The Prometheus and Grafana locations may change during the Proxmox migration; the onboarding process remains the same.
+This procedure is intended primarily for Debian-family Linux systems used in the Proxmox homelab. The locations of Prometheus and Grafana may change during migration; the onboarding process remains the same.
 
 ---
 
@@ -28,24 +28,24 @@ This procedure is intended for Debian-family Linux systems used in the Proxmox h
 
 This runbook covers:
 
-- installing Prometheus `node_exporter` on a Linux host;
-- validating the exporter locally;
-- restricting access to the monitoring endpoint;
+- installing Prometheus `node_exporter`;
+- validating the exporter locally and remotely;
+- restricting access to the exporter endpoint;
 - adding the host to Prometheus;
-- validating the Prometheus scrape;
+- validating Prometheus ingestion;
 - exposing the host in Grafana;
-- creating or importing a Linux dashboard;
-- establishing baseline alerting;
+- dashboard validation/import;
+- baseline alerting;
 - acceptance testing;
 - rollback and troubleshooting.
 
-This runbook does **not** cover application-specific exporters such as PostgreSQL, Nginx, Zabbix, Docker/cAdvisor, or Proxmox API exporters. Those should be added separately after host-level monitoring is healthy.
+This runbook does **not** cover application-specific exporters such as PostgreSQL, Nginx, Zabbix, Docker/cAdvisor, or Proxmox API exporters. Add those only after host-level monitoring is healthy.
 
 ---
 
 ## 3. Monitoring standard
 
-Use the following defaults unless there is a documented reason to deviate.
+Use these defaults unless there is a documented reason to deviate.
 
 | Item | Standard |
 |---|---|
@@ -54,10 +54,10 @@ Use the following defaults unless there is a documented reason to deviate.
 | Prometheus scrape interval | `15s` unless the existing job uses another value |
 | Prometheus job | Reuse the existing Linux/node-exporter job; `node` is the preferred generic name |
 | Grafana data source | Existing Prometheus data source |
-| Host identification | Add explicit `hostname`, `role`, and `environment` target labels |
+| Host identification | Explicit `hostname`, `role`, and `environment` target labels |
 | Security | Port `9100` must not be Internet-facing; restrict to Prometheus where practical |
 | Secrets | None required for the standard node_exporter endpoint |
-| Deployment model | Manual procedure initially; Ansible should become the long-term implementation |
+| Long-term deployment | Ansible-managed |
 
 ### Required labels
 
@@ -66,7 +66,7 @@ Every Linux target should carry these labels where practical:
 ```yaml
 hostname: example-host
 role: application
- environment: homelab
+environment: homelab
 ```
 
 Recommended `role` values include:
@@ -91,8 +91,8 @@ Before changing anything, confirm:
 - [ ] The Linux host is reachable from the Prometheus host.
 - [ ] The host has a stable IP address or stable DNS name.
 - [ ] SSH/sudo access is available.
-- [ ] Prometheus is currently healthy.
-- [ ] Grafana is currently healthy.
+- [ ] Prometheus is healthy before the change.
+- [ ] Grafana is healthy before the change.
 - [ ] The Prometheus configuration location is known.
 - [ ] The Prometheus service/container name is known.
 - [ ] The host is not already scraped on port `9100`.
@@ -104,7 +104,7 @@ Do not add duplicate scrape targets for the same exporter.
 
 ## 5. Capture onboarding values
 
-Record the values before starting.
+Record the values before starting:
 
 ```text
 HOSTNAME=
@@ -116,7 +116,7 @@ PROMETHEUS_CONFIG=
 PROMETHEUS_JOB=
 ```
 
-Example:
+Example only:
 
 ```text
 HOSTNAME=db-01
@@ -151,7 +151,7 @@ Expected result:
 
 - hostname is correct;
 - intended management IP is present;
-- no unexpected failed services are introduced by this work.
+- no unexpected failed services are present.
 
 Capture the host IP and hostname before continuing.
 
@@ -166,11 +166,6 @@ For Debian-family systems, prefer the distribution package unless there is a spe
 ```bash
 sudo apt update
 sudo apt install -y prometheus-node-exporter
-```
-
-Enable and start it:
-
-```bash
 sudo systemctl enable --now prometheus-node-exporter
 ```
 
@@ -209,7 +204,9 @@ curl -fsS http://127.0.0.1:9100/metrics | head -40
 Check important metric families:
 
 ```bash
-curl -fsS http://127.0.0.1:9100/metrics | grep -E '^node_(uname_info|boot_time_seconds|cpu_seconds_total|memory_MemTotal_bytes|filesystem_size_bytes)' | head -30
+curl -fsS http://127.0.0.1:9100/metrics \
+  | grep -E '^node_(uname_info|boot_time_seconds|cpu_seconds_total|memory_MemTotal_bytes|filesystem_size_bytes)' \
+  | head -30
 ```
 
 Expected result: Prometheus-format `node_*` metrics are returned.
@@ -220,9 +217,9 @@ If this fails, do not continue to Prometheus configuration.
 
 ## 10. Optional collectors
 
-The default collectors are sufficient for the initial host onboarding.
+The default collectors are sufficient for initial host onboarding.
 
-If systemd unit or process metrics are specifically required by a dashboard, additional collectors may be enabled after testing. Do not enable collectors simply because a dashboard supports them; additional collectors can increase metric volume and cardinality.
+If systemd unit or process metrics are specifically required by a dashboard, additional collectors may be enabled after testing. Do not enable collectors simply because a dashboard supports them; extra collectors can increase metric volume and cardinality.
 
 After changing exporter arguments, restart and revalidate:
 
@@ -238,7 +235,7 @@ curl -fsS http://127.0.0.1:9100/metrics >/dev/null
 
 ## 11. Network policy
 
-The normal security model for the homelab is:
+The normal security model is:
 
 ```text
 Prometheus host ---> Linux host:9100    ALLOW
@@ -276,11 +273,11 @@ nc -vz <HOST_IP> 9100
 
 Expected result: Prometheus can reach the exporter before its configuration is changed.
 
-If local host access works but this test fails, investigate routing or firewalling first.
+If local access works but this test fails, investigate routing or firewalling first.
 
 ---
 
-# Stage 5 - Add Prometheus target
+# Stage 5 - Add the Prometheus target
 
 ## 13. Preserve the current configuration
 
@@ -292,21 +289,19 @@ Example:
 cp prometheus.yml prometheus.yml.before-<HOSTNAME>
 ```
 
-If the configuration is Git-managed, make the change in the authoritative repository rather than treating a container filesystem as the source of truth.
+If the configuration is Git-managed, make the change in the authoritative repository rather than treating a running container filesystem as the source of truth.
 
 ---
 
 ## 14. Reuse the existing node_exporter job
 
-First find the existing Linux/node_exporter scrape job.
+First find the existing Linux/node_exporter scrape job:
 
 ```bash
 grep -nE 'job_name|9100' prometheus.yml
 ```
 
-If a node_exporter job already exists, add the new target to it.
-
-Avoid creating another job that scrapes the same host and port.
+If a node_exporter job already exists, add the target to it. Avoid creating another job that scrapes the same host and port.
 
 ### Recommended target format
 
@@ -363,7 +358,7 @@ promtool check config /etc/prometheus/prometheus.yml
 
 ### Docker Prometheus
 
-If Prometheus runs in the `prometheus` container and the configuration is mounted at `/etc/prometheus/prometheus.yml`:
+If the container is named `prometheus` and the configuration is mounted at `/etc/prometheus/prometheus.yml`:
 
 ```bash
 docker exec prometheus \
@@ -376,7 +371,7 @@ Expected result:
 SUCCESS
 ```
 
-If validation fails, restore/fix the configuration before continuing.
+If validation fails, restore or fix the configuration before continuing.
 
 ---
 
@@ -390,15 +385,15 @@ If lifecycle reload is enabled:
 curl -fsS -X POST http://127.0.0.1:9090/-/reload
 ```
 
-If lifecycle reload is not enabled, restart the service/container using the deployment's normal management method.
+If lifecycle reload is not enabled, restart Prometheus using the deployment's normal management method.
 
-Examples:
+Native example:
 
 ```bash
 sudo systemctl restart prometheus
 ```
 
-or, from the appropriate Compose project:
+Docker Compose example, from the correct Compose project:
 
 ```bash
 docker compose restart prometheus
@@ -423,13 +418,9 @@ curl -fsS --get \
   | jq
 ```
 
-Expected metric value:
+Expected metric value: `1`.
 
-```text
-1
-```
-
-Also verify the target labels:
+Also verify target metadata:
 
 ```promql
 up{hostname="<HOSTNAME>"}
@@ -460,7 +451,7 @@ up{hostname="<HOSTNAME>"}
 ```promql
 100 - (
   avg by (hostname, instance) (
-    rate(node_cpu_seconds_total{mode="idle"}[5m])
+    rate(node_cpu_seconds_total{hostname="<HOSTNAME>",mode="idle"}[5m])
   ) * 100
 )
 ```
@@ -470,9 +461,9 @@ up{hostname="<HOSTNAME>"}
 ```promql
 100 * (
   1 - (
-    node_memory_MemAvailable_bytes
+    node_memory_MemAvailable_bytes{hostname="<HOSTNAME>"}
     /
-    node_memory_MemTotal_bytes
+    node_memory_MemTotal_bytes{hostname="<HOSTNAME>"}
   )
 )
 ```
@@ -482,9 +473,9 @@ up{hostname="<HOSTNAME>"}
 ```promql
 100 * (
   1 - (
-    node_filesystem_avail_bytes{mountpoint="/",fstype!~"tmpfs|overlay|squashfs"}
+    node_filesystem_avail_bytes{hostname="<HOSTNAME>",mountpoint="/",fstype!~"tmpfs|overlay|squashfs"}
     /
-    node_filesystem_size_bytes{mountpoint="/",fstype!~"tmpfs|overlay|squashfs"}
+    node_filesystem_size_bytes{hostname="<HOSTNAME>",mountpoint="/",fstype!~"tmpfs|overlay|squashfs"}
   )
 )
 ```
@@ -492,13 +483,13 @@ up{hostname="<HOSTNAME>"}
 ### Load average
 
 ```promql
-node_load1
+node_load1{hostname="<HOSTNAME>"}
 ```
 
 ### Uptime
 
 ```promql
-time() - node_boot_time_seconds
+time() - node_boot_time_seconds{hostname="<HOSTNAME>"}
 ```
 
 Do not proceed to Grafana until Prometheus returns data for the new host.
@@ -507,13 +498,13 @@ Do not proceed to Grafana until Prometheus returns data for the new host.
 
 # Stage 7 - Enable the host in Grafana
 
-## 19. Confirm Prometheus data source
+## 19. Confirm the Prometheus data source
 
 Grafana has built-in Prometheus data-source support.
 
-If the existing homelab Prometheus data source is already healthy, reuse it. Do not create a second data source for each Linux host.
+If the existing homelab Prometheus data source is healthy, reuse it. Do not create a separate data source for each Linux host.
 
-In Grafana Explore, select the Prometheus data source and run:
+In Grafana Explore, select Prometheus and run:
 
 ```promql
 up{hostname="<HOSTNAME>"}
@@ -521,7 +512,7 @@ up{hostname="<HOSTNAME>"}
 
 Expected result: `1`.
 
-If Prometheus contains the metric but Grafana does not, troubleshoot the Grafana-to-Prometheus data source before changing node_exporter.
+If Prometheus contains the metric but Grafana does not, troubleshoot Grafana-to-Prometheus connectivity before changing node_exporter.
 
 ---
 
@@ -537,13 +528,13 @@ Preferred approach:
 
 Dashboard variables should preferably filter on the explicit `hostname` label added to the Prometheus target.
 
-Example variable query:
+Example Grafana variable query:
 
-```promql
+```text
 label_values(up{job="node"}, hostname)
 ```
 
-If the existing Prometheus job has a different name, use that job name rather than changing the monitoring standard only to satisfy a dashboard variable.
+If the existing Prometheus job has a different name, use that job name rather than changing the monitoring configuration only to satisfy a dashboard variable.
 
 ---
 
@@ -561,15 +552,15 @@ Import procedure:
 4. Enter dashboard ID `1860`.
 5. Select the existing Prometheus data source.
 6. Import the dashboard.
-7. Verify the host appears and every major panel is populated.
+7. Verify the host appears and the major panels populate.
 
 Treat imported dashboards as a starting point. Homelab-standard dashboards should ultimately be provisioned from Git so changes are reproducible.
 
 ---
 
-# Stage 8 - Baseline Grafana panels
+# Stage 8 - Baseline Grafana coverage
 
-## 22. Minimum dashboard coverage
+## 22. Minimum dashboard panels
 
 Every production Linux host should expose at least:
 
@@ -658,8 +649,8 @@ Monitoring onboarding is complete only when all applicable checks pass.
 
 ### Linux host
 
-- [ ] `prometheus-node-exporter` package installed.
-- [ ] `prometheus-node-exporter` enabled at boot.
+- [ ] `prometheus-node-exporter` installed.
+- [ ] Exporter enabled at boot.
 - [ ] Service is `active (running)`.
 - [ ] TCP `9100` is listening.
 - [ ] Local `/metrics` request succeeds.
@@ -681,7 +672,7 @@ Monitoring onboarding is complete only when all applicable checks pass.
 ### Grafana
 
 - [ ] Grafana Explore returns the host metric.
-- [ ] Host appears in the dashboard host selector.
+- [ ] Host appears in the dashboard selector.
 - [ ] CPU panel contains data.
 - [ ] Memory panel contains data.
 - [ ] Filesystem panel contains data.
@@ -704,7 +695,7 @@ Monitoring onboarding is complete only when all applicable checks pass.
 
 ## 25. Controlled exporter outage test
 
-Only perform this on a disposable or non-critical host, or during an approved test window.
+Only perform this on a disposable/non-critical host or during an approved test window.
 
 Stop node_exporter:
 
@@ -714,19 +705,14 @@ sudo systemctl stop prometheus-node-exporter
 
 Confirm Prometheus changes the target to `DOWN` and the configured host-down alert progresses as expected.
 
-Immediately restore the exporter:
+Restore the exporter:
 
 ```bash
 sudo systemctl start prometheus-node-exporter
-```
-
-Then confirm:
-
-```bash
 systemctl is-active prometheus-node-exporter
 ```
 
-and:
+Then confirm:
 
 ```promql
 up{hostname="<HOSTNAME>"}
@@ -740,14 +726,14 @@ returns `1` again.
 
 ## 26. Remove a host from monitoring
 
-If the onboarding must be rolled back:
+If onboarding must be rolled back:
 
 1. Remove the target from the authoritative Prometheus configuration.
 2. Run `promtool check config`.
 3. Reload/restart Prometheus.
 4. Confirm the removed target no longer appears in active targets.
 5. Remove any host-specific firewall allowance for TCP `9100` if no longer required.
-6. Leave historical Grafana/Prometheus data to expire normally according to retention policy unless there is a specific reason to delete it.
+6. Leave historical Grafana/Prometheus data to expire according to retention policy unless there is a specific reason to delete it.
 
 If node_exporter itself must be removed:
 
@@ -777,9 +763,9 @@ Check:
 
 ---
 
-## 28. `curl localhost:9100` works but Prometheus cannot connect
+## 28. Local exporter works but Prometheus cannot connect
 
-Check:
+On the monitored host:
 
 ```bash
 sudo ss -ltnp | grep ':9100'
@@ -807,8 +793,6 @@ Likely causes:
 ## 29. Prometheus target is DOWN
 
 Inspect the target's `lastError` in Prometheus.
-
-Common errors:
 
 ### Connection refused
 
@@ -859,9 +843,7 @@ Confirm the target has the expected static label:
 up{instance="<HOST_IP>:9100"}
 ```
 
-and inspect its labels.
-
-If `hostname` is missing, correct the Prometheus target configuration and reload Prometheus.
+Inspect the returned labels. If `hostname` is missing, correct the Prometheus target configuration and reload Prometheus.
 
 Prefer fixing target metadata rather than embedding IP-to-host mappings independently in multiple dashboards.
 
@@ -869,9 +851,7 @@ Prefer fixing target metadata rather than embedding IP-to-host mappings independ
 
 ## 32. Dashboard has partial data
 
-Confirm the missing metric exists directly in Prometheus.
-
-Examples:
+Confirm the missing metric exists directly in Prometheus:
 
 ```promql
 node_cpu_seconds_total{hostname="<HOSTNAME>"}
@@ -882,7 +862,7 @@ node_network_receive_bytes_total{hostname="<HOSTNAME>"}
 
 If Prometheus has the metrics, review the dashboard query and variable filters.
 
-If Prometheus does not have the metric, determine whether the relevant node_exporter collector is enabled and supported on the target operating system.
+If Prometheus does not have the metric, determine whether the relevant node_exporter collector is enabled and supported by the target operating system.
 
 ---
 
@@ -925,12 +905,12 @@ Prometheus target
 Grafana dashboard + alerts
 ```
 
-The final goal is that a newly provisioned production Linux VM cannot pass its deployment gate until monitoring has also passed the acceptance checks in this runbook.
+The final goal is that a newly provisioned production Linux VM cannot pass its deployment gate until monitoring has passed the acceptance checks in this runbook.
 
 ---
 
 # References
 
-- Prometheus documentation: Monitoring Linux host metrics with the Node Exporter — https://prometheus.io/docs/guides/node-exporter/
-- Grafana documentation: Prometheus data source — https://grafana.com/docs/grafana/latest/datasources/prometheus/
+- Prometheus: Monitoring Linux host metrics with the Node Exporter — https://prometheus.io/docs/guides/node-exporter/
+- Grafana: Prometheus data source — https://grafana.com/docs/grafana/latest/datasources/prometheus/
 - Grafana dashboard catalog: Node Exporter Full, dashboard 1860 — https://grafana.com/grafana/dashboards/1860-node-exporter-full/
