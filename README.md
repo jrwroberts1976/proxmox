@@ -22,7 +22,7 @@ This repository tracks the build, configuration, migration, and operational runb
 | Secondary SSD health | SMART PASSED | Extended offline self-test completed without error |
 | Secondary SSD baseline temperature | 28–30 C | Healthy baseline during validation |
 | Secondary SSD lifetime | 11,387 power-on hours | ~10 TB lifetime host writes; historical 125 unsafe shutdowns |
-| Secondary SSD current state | Not yet provisioned in Proxmox | Existing NTFS partition remains until deliberate wipe/provisioning step is completed |
+| Secondary SSD current state | Provisioned as Proxmox `vm-ssd` LVM-thin storage | VG `vg_vm_ssd`, thin pool `thinpool`; 424.56 GiB VM/LXC pool with ~22.36 GiB VG reserve |
 | BIOS | HP Q23 Ver. 02.07.00 | Released 2019-04-12; firmware update deferred and still planned |
 | NIC | Integrated Gigabit Ethernet | Proxmox interface `nic0`; 1 Gbit/s full duplex validated |
 | Management bridge | `vmbr0` | Bridged to `nic0` |
@@ -63,8 +63,8 @@ This repository tracks the build, configuration, migration, and operational runb
 - [x] Kingston 480 GB SATA SSD physically installed and detected
 - [x] Kingston SSD SMART baseline captured
 - [x] Kingston SSD extended SMART self-test passed
-- [ ] Wipe legacy NTFS filesystem from Kingston SSD
-- [ ] Provision Kingston SSD as dedicated Proxmox VM/LXC storage
+- [x] Wipe legacy NTFS filesystem from Kingston SSD
+- [x] Provision Kingston SSD as dedicated Proxmox VM/LXC storage (`vm-ssd`)
 - [ ] Review/update HP BIOS firmware
 - [ ] Add Proxmox target to central Prometheus/Grafana
 - [ ] Host security baseline
@@ -76,7 +76,7 @@ This repository tracks the build, configuration, migration, and operational runb
 
 ## Storage design
 
-The current storage plan is to keep the 256 GB NVMe as the Proxmox system/local storage device and use the 480 GB Kingston SATA SSD as a separate VM/LXC storage tier.
+The current storage layout keeps the 256 GB NVMe as the Proxmox system/local storage device and uses the 480 GB Kingston SATA SSD as a separate LVM-thin VM/LXC storage tier.
 
 ```text
 256 GB WDC NVMe
@@ -84,11 +84,17 @@ The current storage plan is to keep the 256 GB NVMe as the Proxmox system/local 
 ├── local
 └── local-lvm
 
-480 GB Kingston A400 SATA SSD
-└── planned dedicated VM/LXC storage
+480 GB Kingston A400 SATA SSD (/dev/sda)
+└── vg_vm_ssd
+    ├── thinpool (~424.56 GiB)
+    │   └── Proxmox storage ID: vm-ssd
+    │       └── content: VM images + LXC root disks
+    └── ~22.36 GiB VG free reserve
 ```
 
-The secondary SSD will not be used as the only backup location. Proxmox backups must ultimately be stored outside the host.
+`vm-ssd` was provisioned and validated on 2026-08-31 and reported `active` in `pvesm status` with 0% data usage immediately after creation.
+
+The secondary SSD is not used as the only backup location. Proxmox backups must ultimately be stored outside the host.
 
 ## Target architecture
 
