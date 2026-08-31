@@ -156,19 +156,15 @@ PROXMOX_VE_INSECURE
 
 Do not print or commit the value of `PROXMOX_VE_API_TOKEN`.
 
-The provider variables must be exported to child processes. The working invocation pattern is:
+OpenTofu operations use the Git-tracked `scripts/tofu-safe` wrapper.
+
+The wrapper sets `umask 077`, loads and exports the existing Proxmox credential environment, and always runs OpenTofu against this repositorys `tofu/` directory.
 
 ```bash
-(
-  set -a
-  source /home/james/.config/homelab-iac/proxmox.env
-  set +a
-
-  tofu -chdir=/home/james/projects/proxmox/tofu plan
-)
+scripts/tofu-safe plan
 ```
 
-Using `source` without `set -a` leaves shell variables unexported and caused the initial provider error `Missing Proxmox VE API Endpoint`.
+The earlier direct-shell workflow required `set -a`; omitting it caused the provider error `Missing Proxmox VE API Endpoint`.
 
 ## Repository secret/state exclusions
 
@@ -401,7 +397,7 @@ Live Grafana rules cover the VM generically through the same job label. `Patch c
 
 The remaining patch-management work is the controlled patch/reboot workflow itself.
 
-## Known warning: SCSI iothread
+## Resolved warning: SCSI iothread
 
 
 VM start emitted:
@@ -410,29 +406,35 @@ VM start emitted:
 WARN: iothread is only valid with virtio disk or virtio-scsi-single controller, ignoring
 ```
 
-The VM still booted successfully, but `iothread=true` is currently ignored because the VM uses the default `virtio-scsi-pci` controller.
+The VM definition now uses `scsi_hardware = "virtio-scsi-single"` while the primary `scsi0` disk retains `iothread = true`.
 
-This should be corrected in OpenTofu, planned and applied through normal change control rather than edited manually in the Proxmox GUI.
+The correction was applied in place with `reboot_after_update = false`. The VM boot ID remained unchanged, a fresh OpenTofu plan reported no changes, and the previous warning was no longer emitted.
+
+## OpenTofu state and recovery model
+
+Git is the authority for configuration. OpenTofu runtime state remains local on TestServer and is never committed to Git.
+
+All OpenTofu operations use `scripts/tofu-safe`, which applies `umask 077`; state and saved plan files must remain owner-only.
+
+Before any destructive IaC operation, the current state must have an encrypted, versioned off-host recovery copy. Recovery requires the Git configuration, separately recovered credentials and the correct state snapshot, followed by `scripts/tofu-safe init` and a reviewed `scripts/tofu-safe plan`.
+
+If multiple control nodes or CI runners later need to make concurrent changes, migrate to a locking remote backend rather than sharing local state.
 
 ## Manual workflow
 
 ### Validate
 
 ```bash
-tofu -chdir=tofu fmt
-tofu -chdir=tofu validate
+scripts/tofu-safe fmt -check
+scripts/tofu-safe validate
 ```
 
 ### Plan
 
 ```bash
-(
-  set -a
-  source /home/james/.config/homelab-iac/proxmox.env
-  set +a
-
-  tofu -chdir=tofu plan -out=/tmp/proxmox.tfplan
-)
+rm -f /tmp/proxmox.tfplan
+scripts/tofu-safe plan -out=/tmp/proxmox.tfplan
+scripts/tofu-safe show -no-color /tmp/proxmox.tfplan
 ```
 
 Review the complete plan before apply. Production changes must not rely only on the summary count.
@@ -440,13 +442,7 @@ Review the complete plan before apply. Production changes must not rely only on 
 ### Apply saved plan
 
 ```bash
-(
-  set -a
-  source /home/james/.config/homelab-iac/proxmox.env
-  set +a
-
-  tofu -chdir=tofu apply /tmp/proxmox.tfplan
-)
+scripts/tofu-safe apply /tmp/proxmox.tfplan
 ```
 
 ### Ansible syntax check
@@ -485,6 +481,5 @@ For this project:
 
 ## Current next actions
 
-1. Decide the durable OpenTofu state and recovery model.
-2. Select an off-host backup destination and complete backup/restore proof.
-3. Destroy VM 100 through OpenTofu and rebuild it from Git as the disposable IaC acceptance test.
+1. Select an off-host backup destination and complete backup/restore proof.
+2. Destroy VM 100 through OpenTofu and rebuild it from Git as the disposable IaC acceptance test.
