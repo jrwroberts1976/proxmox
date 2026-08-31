@@ -101,3 +101,4 @@ Planned workloads include a Debian Docker VM, Home Assistant OS VM, and future t
 - [`docs/project-plan.md`](docs/project-plan.md) — full project plan, IaC model, Jenkins integration, migration gates, DNS resilience, backup/DR and acceptance criteria.
 - [`docs/installation.md`](docs/installation.md) — physical host installation, repository setup, networking, validation commands, SMART/thermal/virtualisation baselines and post-install gates.
 - [`docs/build-log.md`](docs/build-log.md) — chronological implementation record of changes performed on the live host.
+- [`runbooks/alloy-install.md`](runbooks/alloy-install.md) — standard Grafana Alloy installation, Loki log shipping, validation, security, troubleshooting, rollback and future Ansible automation procedure.
