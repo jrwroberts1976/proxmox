@@ -166,6 +166,7 @@
         enabled: true
         state: started
         daemon_reload: true
+      when: not ansible_check_mode
 
     - name: Run patch metrics collector now
       ansible.builtin.systemd_service:
@@ -188,6 +189,7 @@
     - name: Reload systemd
       ansible.builtin.systemd_service:
         daemon_reload: true
+      when: not ansible_check_mode
 
     - name: Run patch metrics collector
       ansible.builtin.systemd_service:
