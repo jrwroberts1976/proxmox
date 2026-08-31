@@ -1,0 +1,14 @@
+---
+all:
+  children:
+    linux_security_hardening:
+      hosts:
+        debian-iac-test-01:
+          ansible_host: 192.168.2.120
+          ansible_user: james
+          ansible_become: true
+
+        PROXMOX:
+          ansible_host: 192.168.2.70
+          ansible_user: root
+          ansible_become: false

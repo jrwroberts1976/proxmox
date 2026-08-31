@@ -1,0 +1,8 @@
+---
+- name: Apply validated Linux security hardening
+  hosts: linux_security_hardening
+  become: true
+  gather_facts: true
+
+  roles:
+    - role: linux-security-hardening

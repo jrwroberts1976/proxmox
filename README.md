@@ -107,3 +107,4 @@ Planned workloads include a Debian Docker VM, Home Assistant OS VM, and future t
 - [`runbooks/prometheus-install.md`](runbooks/prometheus-install.md) — deploy the central Prometheus service, persistent TSDB, remote-write receiver, validation and Grafana integration.
 - [`runbooks/loki-install.md`](runbooks/loki-install.md) — deploy the central Loki log store, persistent storage, Alloy ingestion path and Grafana integration.
 - [`runbooks/linux-vm-observability-bootstrap.md`](runbooks/linux-vm-observability-bootstrap.md) — standard metrics + logs commissioning procedure for every new Linux VM.
+- [`ansible/linux-security-hardening/README.md`](ansible/linux-security-hardening/README.md) — validated Ansible runbook for OpenSSH UMAC-64 removal and persistent ICMP timestamp-request blocking on Debian/Proxmox hosts.

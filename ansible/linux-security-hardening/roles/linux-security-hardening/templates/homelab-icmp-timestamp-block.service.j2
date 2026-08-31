@@ -1,0 +1,12 @@
+[Unit]
+Description=Block ICMP timestamp requests
+After=network.target
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c '{{ linux_security_hardening_iptables_binary }} -C INPUT -p icmp --icmp-type timestamp-request -j DROP 2>/dev/null || {{ linux_security_hardening_iptables_binary }} -I INPUT 1 -p icmp --icmp-type timestamp-request -j DROP'
+ExecStop=/bin/sh -c '{{ linux_security_hardening_iptables_binary }} -C INPUT -p icmp --icmp-type timestamp-request -j DROP 2>/dev/null && {{ linux_security_hardening_iptables_binary }} -D INPUT -p icmp --icmp-type timestamp-request -j DROP || true'
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
