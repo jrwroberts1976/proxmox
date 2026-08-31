@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+umask 077
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+TOFU_DIR="${REPO_ROOT}/tofu"
+ENV_FILE="${HOME}/.config/homelab-iac/proxmox.env"
+
+if [[ ! -r "${ENV_FILE}" ]]; then
+  echo "FAIL: OpenTofu environment file is not readable: ${ENV_FILE}" >&2
+  exit 1
+fi
+
+set -a
+source "${ENV_FILE}"
+set +a
+
+exec tofu -chdir="${TOFU_DIR}" "$@"
