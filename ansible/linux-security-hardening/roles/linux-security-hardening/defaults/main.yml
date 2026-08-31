@@ -1,0 +1,13 @@
+---
+linux_security_hardening_manage_ssh_macs: true
+linux_security_hardening_block_icmp_timestamp: true
+
+linux_security_hardening_sshd_binary: /usr/sbin/sshd
+linux_security_hardening_iptables_binary: /usr/sbin/iptables
+linux_security_hardening_ssh_service: ssh
+linux_security_hardening_ssh_dropin: /etc/ssh/sshd_config.d/90-homelab-macs.conf
+linux_security_hardening_icmp_unit: /etc/systemd/system/homelab-icmp-timestamp-block.service
+
+linux_security_hardening_removed_macs:
+  - umac-64-etm@openssh.com
+  - umac-64@openssh.com
