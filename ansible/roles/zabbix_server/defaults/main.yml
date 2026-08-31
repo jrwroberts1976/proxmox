@@ -1,0 +1,18 @@
+---
+zabbix_version: "7.0"
+zabbix_server_packages:
+  - zabbix-server-pgsql
+  - zabbix-frontend-php
+  - zabbix-nginx-conf
+  - zabbix-sql-scripts
+  - zabbix-agent2
+  - postgresql-client
+zabbix_server_db_host: localhost
+zabbix_server_db_port: 5432
+zabbix_server_db_name: zabbix
+zabbix_server_db_user: zabbix
+zabbix_server_initialize_schema: true
+zabbix_server_nginx_listen: 8080
+zabbix_server_nginx_server_name: _
+zabbix_server_service_name: zabbix-server
+zabbix_server_agent_service_name: zabbix-agent2

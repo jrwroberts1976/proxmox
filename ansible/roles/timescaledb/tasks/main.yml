@@ -1,0 +1,95 @@
+---
+- name: Verify TimescaleDB role platform
+  ansible.builtin.assert:
+    that:
+      - ansible_distribution == 'Debian'
+      - ansible_distribution_major_version | int >= 13
+    fail_msg: "The TimescaleDB role currently targets Debian 13 or newer."
+
+- name: Install TimescaleDB repository prerequisites
+  ansible.builtin.apt:
+    name:
+      - ca-certificates
+      - curl
+      - gnupg
+      - python3-psycopg2
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Ensure APT keyring directory exists
+  ansible.builtin.file:
+    path: /etc/apt/keyrings
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install TimescaleDB repository signing key
+  ansible.builtin.get_url:
+    url: "{{ timescaledb_repository_key_url }}"
+    dest: "{{ timescaledb_repository_key_path }}"
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Configure TimescaleDB APT repository
+  ansible.builtin.copy:
+    dest: /etc/apt/sources.list.d/timescale-timescaledb.sources
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      Types: deb
+      URIs: {{ timescaledb_repository_uri }}
+      Suites: {{ ansible_distribution_release }}
+      Components: main
+      Signed-By: {{ timescaledb_repository_key_path }}
+
+- name: Install TimescaleDB package
+  ansible.builtin.apt:
+    name: "{{ timescaledb_package }}"
+    state: present
+    update_cache: true
+
+- name: Configure TimescaleDB preload library
+  ansible.builtin.copy:
+    dest: "/etc/postgresql/{{ postgresql_version }}/main/conf.d/98-timescaledb.conf"
+    owner: postgres
+    group: postgres
+    mode: "0644"
+    content: |
+      # Managed by Ansible.
+      shared_preload_libraries = 'timescaledb'
+  register: timescaledb_preload
+
+- name: Restart PostgreSQL after TimescaleDB preload change
+  ansible.builtin.service:
+    name: "{{ postgresql_service_name }}"
+    state: restarted
+    enabled: true
+  when: timescaledb_preload.changed
+
+- name: Optionally run timescaledb-tune
+  ansible.builtin.command:
+    cmd: timescaledb-tune --quiet --yes
+  when: timescaledb_run_tune | bool
+  register: timescaledb_tune_result
+  changed_when: timescaledb_run_tune | bool
+
+- name: Restart PostgreSQL after timescaledb-tune
+  ansible.builtin.service:
+    name: "{{ postgresql_service_name }}"
+    state: restarted
+    enabled: true
+  when:
+    - timescaledb_run_tune | bool
+    - timescaledb_tune_result is changed
+
+- name: Ensure TimescaleDB extension exists in selected databases
+  community.postgresql.postgresql_ext:
+    name: timescaledb
+    db: "{{ item }}"
+    state: present
+  become_user: postgres
+  loop: "{{ timescaledb_databases }}"

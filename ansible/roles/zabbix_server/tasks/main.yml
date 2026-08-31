@@ -1,0 +1,143 @@
+---
+- name: Verify Zabbix server role platform
+  ansible.builtin.assert:
+    that:
+      - ansible_distribution == 'Debian'
+      - ansible_distribution_major_version | int >= 13
+      - zabbix_server_db_password is defined
+      - (zabbix_server_db_password | default('') | length) > 0
+    fail_msg: "Zabbix server currently targets Debian 13+ and requires zabbix_server_db_password from Ansible Vault or another secret source."
+
+- name: Download official Zabbix repository package
+  ansible.builtin.get_url:
+    url: "https://repo.zabbix.com/zabbix/{{ zabbix_version }}/debian/pool/main/z/zabbix-release/zabbix-release_latest_{{ zabbix_version }}+debian{{ ansible_distribution_major_version }}_all.deb"
+    dest: "/tmp/zabbix-release-{{ zabbix_version }}-debian{{ ansible_distribution_major_version }}.deb"
+    mode: "0644"
+
+- name: Install official Zabbix repository package
+  ansible.builtin.apt:
+    deb: "/tmp/zabbix-release-{{ zabbix_version }}-debian{{ ansible_distribution_major_version }}.deb"
+    state: present
+
+- name: Install Zabbix server packages
+  ansible.builtin.apt:
+    name: "{{ zabbix_server_packages }}"
+    state: present
+    update_cache: true
+
+- name: Configure Zabbix server database host
+  ansible.builtin.lineinfile:
+    path: /etc/zabbix/zabbix_server.conf
+    regexp: '^#?DBHost='
+    line: "DBHost={{ zabbix_server_db_host }}"
+  register: zabbix_db_host_config
+
+- name: Configure Zabbix server database port
+  ansible.builtin.lineinfile:
+    path: /etc/zabbix/zabbix_server.conf
+    regexp: '^#?DBPort='
+    line: "DBPort={{ zabbix_server_db_port }}"
+  register: zabbix_db_port_config
+
+- name: Configure Zabbix server database name
+  ansible.builtin.lineinfile:
+    path: /etc/zabbix/zabbix_server.conf
+    regexp: '^DBName='
+    line: "DBName={{ zabbix_server_db_name }}"
+  register: zabbix_db_name_config
+
+- name: Configure Zabbix server database user
+  ansible.builtin.lineinfile:
+    path: /etc/zabbix/zabbix_server.conf
+    regexp: '^DBUser='
+    line: "DBUser={{ zabbix_server_db_user }}"
+  register: zabbix_db_user_config
+
+- name: Configure Zabbix server database password
+  ansible.builtin.lineinfile:
+    path: /etc/zabbix/zabbix_server.conf
+    regexp: '^#?DBPassword='
+    line: "DBPassword={{ zabbix_server_db_password }}"
+  register: zabbix_db_password_config
+  no_log: true
+
+- name: Check whether Zabbix database schema exists
+  ansible.builtin.command:
+    argv:
+      - psql
+      - -h
+      - "{{ zabbix_server_db_host }}"
+      - -p
+      - "{{ zabbix_server_db_port | string }}"
+      - -U
+      - "{{ zabbix_server_db_user }}"
+      - -d
+      - "{{ zabbix_server_db_name }}"
+      - -tAc
+      - "SELECT to_regclass('public.users') IS NOT NULL;"
+  environment:
+    PGPASSWORD: "{{ zabbix_server_db_password }}"
+  register: zabbix_schema_check
+  changed_when: false
+  no_log: true
+  when: zabbix_server_initialize_schema | bool
+
+- name: Import initial Zabbix PostgreSQL schema
+  ansible.builtin.shell:
+    cmd: >-
+      set -o pipefail &&
+      zcat /usr/share/zabbix-sql-scripts/postgresql/server.sql.gz |
+      psql -h {{ zabbix_server_db_host | quote }}
+      -p {{ zabbix_server_db_port | quote }}
+      -U {{ zabbix_server_db_user | quote }}
+      -d {{ zabbix_server_db_name | quote }}
+    executable: /bin/bash
+  environment:
+    PGPASSWORD: "{{ zabbix_server_db_password }}"
+  no_log: true
+  when:
+    - zabbix_server_initialize_schema | bool
+    - zabbix_schema_check.stdout | trim != 't'
+
+- name: Configure packaged Zabbix Nginx listener
+  ansible.builtin.lineinfile:
+    path: /etc/zabbix/nginx.conf
+    regexp: '^\s*#?\s*listen\s+'
+    line: "        listen {{ zabbix_server_nginx_listen }};"
+  register: zabbix_nginx_listen_config
+
+- name: Configure packaged Zabbix Nginx server name
+  ansible.builtin.lineinfile:
+    path: /etc/zabbix/nginx.conf
+    regexp: '^\s*#?\s*server_name\s+'
+    line: "        server_name {{ zabbix_server_nginx_server_name }};"
+  register: zabbix_nginx_name_config
+
+- name: Restart Zabbix server after configuration changes
+  ansible.builtin.service:
+    name: "{{ zabbix_server_service_name }}"
+    state: restarted
+    enabled: true
+  when: >-
+    zabbix_db_host_config.changed or
+    zabbix_db_port_config.changed or
+    zabbix_db_name_config.changed or
+    zabbix_db_user_config.changed or
+    zabbix_db_password_config.changed
+
+- name: Ensure Zabbix services are enabled and running
+  ansible.builtin.service:
+    name: "{{ item }}"
+    state: started
+    enabled: true
+  loop:
+    - "{{ zabbix_server_service_name }}"
+    - "{{ zabbix_server_agent_service_name }}"
+    - nginx
+    - php8.4-fpm
+
+- name: Reload Nginx when Zabbix frontend configuration changes
+  ansible.builtin.service:
+    name: nginx
+    state: reloaded
+  when: zabbix_nginx_listen_config.changed or zabbix_nginx_name_config.changed

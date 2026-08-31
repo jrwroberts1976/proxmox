@@ -1,0 +1,7 @@
+---
+- name: Configure Zabbix agents
+  hosts: zabbix_agents
+  become: true
+  gather_facts: true
+  roles:
+    - role: zabbix_agent

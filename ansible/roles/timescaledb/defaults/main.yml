@@ -1,0 +1,9 @@
+---
+postgresql_version: 17
+postgresql_service_name: postgresql
+timescaledb_repository_key_url: https://packagecloud.io/timescale/timescaledb/gpgkey
+timescaledb_repository_key_path: /etc/apt/keyrings/timescale-timescaledb.asc
+timescaledb_repository_uri: https://packagecloud.io/timescale/timescaledb/debian
+timescaledb_package: "timescaledb-2-postgresql-{{ postgresql_version }}"
+timescaledb_databases: []
+timescaledb_run_tune: false
