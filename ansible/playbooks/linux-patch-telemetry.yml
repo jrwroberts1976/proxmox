@@ -1,0 +1,198 @@
+---
+- name: Configure Linux patch telemetry
+  hosts: proxmox_hosts
+  become: false
+
+  vars:
+    patch_metrics_directory: /var/lib/prometheus/node-exporter
+    patch_metrics_file: /var/lib/prometheus/node-exporter/homelab_patch.prom
+    patch_host_label: "{{ inventory_hostname }}"
+
+  tasks:
+    - name: Verify APT is available
+      ansible.builtin.command: command -v apt-get
+      register: patch_apt_get
+      changed_when: false
+
+    - name: Verify node exporter service exists
+      ansible.builtin.command: systemctl cat prometheus-node-exporter.service
+      register: patch_node_exporter_service
+      changed_when: false
+
+    - name: Ensure node exporter textfile directory exists
+      ansible.builtin.file:
+        path: "{{ patch_metrics_directory }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Install patch metrics collector
+      ansible.builtin.copy:
+        dest: /usr/local/sbin/homelab-patch-metrics
+        owner: root
+        group: root
+        mode: "0755"
+        content: |
+          #!/usr/bin/env bash
+          set -u
+          set -o pipefail
+
+          OUTDIR="{{ patch_metrics_directory }}"
+          OUTFILE="{{ patch_metrics_file }}"
+          HOST_LABEL="{{ patch_host_label }}"
+          NOW="$(date +%s)"
+          TMPFILE="$(mktemp "${OUTDIR}/.homelab_patch.prom.XXXXXX")"
+
+          cleanup() {
+            rm -f "$TMPFILE"
+          }
+          trap cleanup EXIT
+
+          previous_success=0
+          if [ -r "$OUTFILE" ]; then
+            previous_success="$(
+              awk '/^homelab_patch_last_success_timestamp_seconds[[:space:]]/ { value=$2 } END { print value+0 }' \
+                "$OUTFILE" 2>/dev/null || true
+            )"
+          fi
+
+          updates_available=0
+          security_updates_available=0
+          last_success="$previous_success"
+
+          if apt_simulation="$(apt-get -s -o Debug::NoLocking=true dist-upgrade 2>/dev/null)"; then
+            updates_available="$(
+              printf '%s\n' "$apt_simulation" |
+                awk '/^Inst / { count++ } END { print count+0 }'
+            )"
+            security_updates_available="$(
+              printf '%s\n' "$apt_simulation" |
+                awk 'BEGIN { IGNORECASE=1 } /^Inst / && /security/ { count++ } END { print count+0 }'
+            )"
+            last_success="$NOW"
+          fi
+
+          reboot_required=0
+          if [ -e /var/run/reboot-required ]; then
+            reboot_required=1
+          fi
+
+          unattended_enabled=0
+          if systemctl is-enabled --quiet unattended-upgrades.service 2>/dev/null; then
+            unattended_enabled=1
+          fi
+
+          unattended_active=0
+          if systemctl is-active --quiet unattended-upgrades.service 2>/dev/null; then
+            unattended_active=1
+          fi
+
+          cat > "$TMPFILE" <<EOF
+          # HELP homelab_updates_available Number of APT package updates currently visible in the local package cache.
+          # TYPE homelab_updates_available gauge
+          homelab_updates_available{host="$HOST_LABEL"} $updates_available
+          # HELP homelab_security_updates_available Number of APT updates whose simulated upgrade source indicates security.
+          # TYPE homelab_security_updates_available gauge
+          homelab_security_updates_available{host="$HOST_LABEL"} $security_updates_available
+          # HELP homelab_reboot_required Whether the host currently requires a reboot according to /var/run/reboot-required.
+          # TYPE homelab_reboot_required gauge
+          homelab_reboot_required{host="$HOST_LABEL"} $reboot_required
+          # HELP homelab_unattended_upgrades_enabled Whether unattended-upgrades.service is enabled.
+          # TYPE homelab_unattended_upgrades_enabled gauge
+          homelab_unattended_upgrades_enabled{host="$HOST_LABEL"} $unattended_enabled
+          # HELP homelab_unattended_upgrades_active Whether unattended-upgrades.service is active.
+          # TYPE homelab_unattended_upgrades_active gauge
+          homelab_unattended_upgrades_active{host="$HOST_LABEL"} $unattended_active
+          # HELP homelab_patch_check_timestamp_seconds Unix timestamp of the latest collector execution.
+          # TYPE homelab_patch_check_timestamp_seconds gauge
+          homelab_patch_check_timestamp_seconds{host="$HOST_LABEL"} $NOW
+          # HELP homelab_patch_last_success_timestamp_seconds Unix timestamp of the latest successful APT simulation.
+          # TYPE homelab_patch_last_success_timestamp_seconds gauge
+          homelab_patch_last_success_timestamp_seconds{host="$HOST_LABEL"} $last_success
+          EOF
+
+          chmod 0644 "$TMPFILE"
+          mv -f "$TMPFILE" "$OUTFILE"
+          trap - EXIT
+      notify: Run patch metrics collector
+
+    - name: Install patch metrics systemd service
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/homelab-patch-metrics.service
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=Homelab Linux patch telemetry collector
+          After=network-online.target
+
+          [Service]
+          Type=oneshot
+          ExecStart=/usr/local/sbin/homelab-patch-metrics
+          User=root
+          Group=root
+          Nice=10
+      notify:
+        - Reload systemd
+        - Run patch metrics collector
+
+    - name: Install patch metrics systemd timer
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/homelab-patch-metrics.timer
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=Run Homelab Linux patch telemetry hourly
+
+          [Timer]
+          OnBootSec=5min
+          OnUnitActiveSec=1h
+          RandomizedDelaySec=5min
+          Persistent=true
+          Unit=homelab-patch-metrics.service
+
+          [Install]
+          WantedBy=timers.target
+      notify: Reload systemd
+
+    - name: Flush systemd configuration handlers
+      ansible.builtin.meta: flush_handlers
+
+    - name: Enable and start patch metrics timer
+      ansible.builtin.systemd_service:
+        name: homelab-patch-metrics.timer
+        enabled: true
+        state: started
+        daemon_reload: true
+
+    - name: Run patch metrics collector now
+      ansible.builtin.systemd_service:
+        name: homelab-patch-metrics.service
+        state: started
+      when: not ansible_check_mode
+
+    - name: Read generated patch metrics
+      ansible.builtin.command: cat "{{ patch_metrics_file }}"
+      register: patch_metrics_output
+      changed_when: false
+      when: not ansible_check_mode
+
+    - name: Show generated patch metrics
+      ansible.builtin.debug:
+        var: patch_metrics_output.stdout_lines
+      when: not ansible_check_mode
+
+  handlers:
+    - name: Reload systemd
+      ansible.builtin.systemd_service:
+        daemon_reload: true
+
+    - name: Run patch metrics collector
+      ansible.builtin.systemd_service:
+        name: homelab-patch-metrics.service
+        state: started
+      when: not ansible_check_mode
