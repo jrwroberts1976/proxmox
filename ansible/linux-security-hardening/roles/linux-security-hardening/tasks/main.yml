@@ -17,9 +17,9 @@
 - name: Require SSH and iptables tooling
   ansible.builtin.assert:
     that:
-      - item.stat.exists
-      - item.stat.executable
-    fail_msg: "Required executable is missing: {{ item.item }}"
+      - item.stat.exists | default(false)
+      - item.stat.executable | default(false)
+    fail_msg: "Required executable is missing or not executable: {{ item.item }}"
   loop: "{{ linux_security_hardening_binary_stats.results }}"
 
 - name: Ensure OpenSSH drop-in directory exists
