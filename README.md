@@ -103,3 +103,7 @@ Planned workloads include a Debian Docker VM, Home Assistant OS VM, and future t
 - [`docs/build-log.md`](docs/build-log.md) — chronological implementation record of changes performed on the live host.
 - [`runbooks/linux-monitoring-grafana.md`](runbooks/linux-monitoring-grafana.md) — standard Linux host onboarding procedure for node_exporter, Prometheus, Grafana dashboards, alerting, acceptance testing and rollback.
 - [`runbooks/alloy-install.md`](runbooks/alloy-install.md) — standard Grafana Alloy installation, Loki log shipping, validation, security, troubleshooting, rollback and future Ansible automation procedure.
+- [`runbooks/alloy-linux-monitoring.md`](runbooks/alloy-linux-monitoring.md) — enable Linux host metrics with Alloy `prometheus.exporter.unix`, Prometheus remote write, Grafana validation and alerting.
+- [`runbooks/prometheus-install.md`](runbooks/prometheus-install.md) — deploy the central Prometheus service, persistent TSDB, remote-write receiver, validation and Grafana integration.
+- [`runbooks/loki-install.md`](runbooks/loki-install.md) — deploy the central Loki log store, persistent storage, Alloy ingestion path and Grafana integration.
+- [`runbooks/linux-vm-observability-bootstrap.md`](runbooks/linux-vm-observability-bootstrap.md) — standard metrics + logs commissioning procedure for every new Linux VM.
