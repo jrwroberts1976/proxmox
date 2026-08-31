@@ -6,7 +6,6 @@
   vars:
     patch_metrics_directory: /var/lib/prometheus/node-exporter
     patch_metrics_file: /var/lib/prometheus/node-exporter/homelab_patch.prom
-    patch_host_label: "{{ inventory_hostname }}"
 
   tasks:
     - name: Verify APT is available
@@ -40,7 +39,6 @@
 
           OUTDIR="{{ patch_metrics_directory }}"
           OUTFILE="{{ patch_metrics_file }}"
-          HOST_LABEL="{{ patch_host_label }}"
           NOW="$(date +%s)"
           TMPFILE="$(mktemp "${OUTDIR}/.homelab_patch.prom.XXXXXX")"
 
@@ -91,25 +89,25 @@
           cat > "$TMPFILE" <<EOF
           # HELP homelab_updates_available Number of APT package updates currently visible in the local package cache.
           # TYPE homelab_updates_available gauge
-          homelab_updates_available{host="$HOST_LABEL"} $updates_available
+          homelab_updates_available $updates_available
           # HELP homelab_security_updates_available Number of APT updates whose simulated upgrade source indicates security.
           # TYPE homelab_security_updates_available gauge
-          homelab_security_updates_available{host="$HOST_LABEL"} $security_updates_available
+          homelab_security_updates_available $security_updates_available
           # HELP homelab_reboot_required Whether the host currently requires a reboot according to /var/run/reboot-required.
           # TYPE homelab_reboot_required gauge
-          homelab_reboot_required{host="$HOST_LABEL"} $reboot_required
+          homelab_reboot_required $reboot_required
           # HELP homelab_unattended_upgrades_enabled Whether unattended-upgrades.service is enabled.
           # TYPE homelab_unattended_upgrades_enabled gauge
-          homelab_unattended_upgrades_enabled{host="$HOST_LABEL"} $unattended_enabled
+          homelab_unattended_upgrades_enabled $unattended_enabled
           # HELP homelab_unattended_upgrades_active Whether unattended-upgrades.service is active.
           # TYPE homelab_unattended_upgrades_active gauge
-          homelab_unattended_upgrades_active{host="$HOST_LABEL"} $unattended_active
+          homelab_unattended_upgrades_active $unattended_active
           # HELP homelab_patch_check_timestamp_seconds Unix timestamp of the latest collector execution.
           # TYPE homelab_patch_check_timestamp_seconds gauge
-          homelab_patch_check_timestamp_seconds{host="$HOST_LABEL"} $NOW
+          homelab_patch_check_timestamp_seconds $NOW
           # HELP homelab_patch_last_success_timestamp_seconds Unix timestamp of the latest successful APT simulation.
           # TYPE homelab_patch_last_success_timestamp_seconds gauge
-          homelab_patch_last_success_timestamp_seconds{host="$HOST_LABEL"} $last_success
+          homelab_patch_last_success_timestamp_seconds $last_success
           EOF
 
           chmod 0644 "$TMPFILE"
