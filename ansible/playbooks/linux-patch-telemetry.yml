@@ -10,7 +10,7 @@
 
   tasks:
     - name: Verify APT is available
-      ansible.builtin.command: command -v apt-get
+      ansible.builtin.command: which apt-get
       register: patch_apt_get
       changed_when: false
 
