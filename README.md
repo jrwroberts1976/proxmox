@@ -65,6 +65,7 @@ This repository tracks the build, configuration, migration, and operational runb
 - [x] Kingston SSD extended SMART self-test passed
 - [x] Wipe legacy NTFS filesystem from Kingston SSD
 - [x] Provision Kingston SSD as dedicated Proxmox VM/LXC storage (`vm-ssd`)
+- [x] Linux VM/PostgreSQL/TimescaleDB/Nginx deployment runbooks prepared
 - [ ] Review/update HP BIOS firmware
 - [ ] Add Proxmox target to central Prometheus/Grafana
 - [ ] Host security baseline
@@ -102,11 +103,34 @@ The Proxmox host will become the main x86 compute platform. DNS remains independ
 
 Planned workloads include a Debian Docker VM, Home Assistant OS VM, and future test/lab VMs.
 
+## Initial application-platform build sequence
+
+The first IaC application-platform proof follows these runbooks in order:
+
+```text
+Linux VM IaC deployment
+        |
+        v
+PostgreSQL
+        |
+        v
+TimescaleDB
+        |
+        v
+Nginx
+```
+
+Each component has its own validation, idempotence, acceptance and rollback gates. The first deployment remains disposable until backup/recovery and observability gates are passed.
+
 ## Documentation
 
 - [`docs/project-plan.md`](docs/project-plan.md) — full project plan, IaC model, Jenkins integration, migration gates, DNS resilience, backup/DR and acceptance criteria.
 - [`docs/installation.md`](docs/installation.md) — physical host installation, repository setup, networking, validation commands, SMART/thermal/virtualisation baselines and post-install gates.
 - [`docs/build-log.md`](docs/build-log.md) — chronological implementation record of changes performed on the live host.
+- [`runbooks/linux-vm-iac-deployment.md`](runbooks/linux-vm-iac-deployment.md) — deploy a Debian 13 Proxmox VM through OpenTofu/Terraform, cloud-init and the `vm-ssd` storage tier, then hand it to Ansible.
+- [`runbooks/postgresql-install.md`](runbooks/postgresql-install.md) — deploy and validate the repository PostgreSQL Ansible role, database/users, access controls, idempotence and rollback gates.
+- [`runbooks/timescaledb-install.md`](runbooks/timescaledb-install.md) — deploy TimescaleDB on PostgreSQL, validate preload/extension/hypertables, and control tuning/upgrades.
+- [`runbooks/nginx-install.md`](runbooks/nginx-install.md) — deploy Nginx sites/reverse proxies through Ansible with configuration testing, exposure/security and rollback gates.
 - [`runbooks/linux-monitoring-grafana.md`](runbooks/linux-monitoring-grafana.md) — standard Linux host onboarding procedure for node_exporter, Prometheus, Grafana dashboards, alerting, acceptance testing and rollback.
 - [`runbooks/alloy-install.md`](runbooks/alloy-install.md) — standard Grafana Alloy installation, Loki log shipping, validation, security, troubleshooting, rollback and future Ansible automation procedure.
 - [`runbooks/alloy-linux-monitoring.md`](runbooks/alloy-linux-monitoring.md) — enable Linux host metrics with Alloy `prometheus.exporter.unix`, Prometheus remote write, Grafana validation and alerting.
