@@ -101,3 +101,7 @@ Planned workloads include a Debian Docker VM, Home Assistant OS VM, and future t
 - [`docs/project-plan.md`](docs/project-plan.md) — full project plan, IaC model, Jenkins integration, migration gates, DNS resilience, backup/DR and acceptance criteria.
 - [`docs/installation.md`](docs/installation.md) — physical host installation, repository setup, networking, validation commands, SMART/thermal/virtualisation baselines and post-install gates.
 - [`docs/build-log.md`](docs/build-log.md) — chronological implementation record of changes performed on the live host.
+- [`runbooks/alloy-linux-monitoring.md`](runbooks/alloy-linux-monitoring.md) — enable Linux host metrics with Alloy `prometheus.exporter.unix`, Prometheus remote write, Grafana validation and alerting.
+- [`runbooks/prometheus-install.md`](runbooks/prometheus-install.md) — deploy the central Prometheus service, persistent TSDB, remote-write receiver, validation and Grafana integration.
+- [`runbooks/loki-install.md`](runbooks/loki-install.md) — deploy the central Loki log store, persistent storage, Alloy ingestion path and Grafana integration.
+- [`runbooks/linux-vm-observability-bootstrap.md`](runbooks/linux-vm-observability-bootstrap.md) — standard metrics + logs commissioning procedure for every new Linux VM.
