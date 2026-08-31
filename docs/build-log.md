@@ -209,3 +209,109 @@ The second SSD will not be treated as the sole backup location. Backup storage m
 4. Review/update HP Q23 BIOS when the maintenance window allows.
 5. Add Proxmox node exporter target to central Prometheus/Grafana.
 6. Continue host security and backup/restore design before production migration.
+
+---
+
+## 2026-08-31 — Secondary SSD Proxmox provisioning
+
+### Pre-provision validation
+
+The secondary Kingston SSD was revalidated before provisioning.
+
+Confirmed state immediately before the change:
+
+- `/dev/sda` reported as `KINGSTON SA400S37480G` with 480,103,981,056 bytes raw capacity.
+- Nothing on `/dev/sda` was mounted.
+- `/dev/sda` was not an existing LVM physical volume.
+- The Proxmox system volume group `pve` remained solely on `/dev/nvme0n1p3`.
+- Proxmox storage consisted only of `local` and `local-lvm`.
+- The legacy NTFS signature had been removed and `wipefs -n /dev/sda` returned no remaining filesystem signature.
+
+### Provisioning performed
+
+The Kingston SSD was provisioned as a dedicated LVM-thin tier for VM and LXC disks.
+
+Configuration created:
+
+```text
+Disk:        /dev/sda
+PV:          /dev/sda
+VG:          vg_vm_ssd
+Thin pool:   thinpool
+Storage ID:  vm-ssd
+Content:     images,rootdir
+```
+
+The thin pool was created from 95% of the volume group's free extents, intentionally leaving reserve capacity in the VG rather than allocating the entire SSD.
+
+### Final LVM layout
+
+Post-provisioning LVM state:
+
+```text
+PV             VG         PSize      PFree
+/dev/sda       vg_vm_ssd  <447.13g   <22.36g
+
+VG             VSize      VFree
+vg_vm_ssd      <447.13g   <22.36g
+
+LV             VG         LSize      Type       Data%   Meta%
+thinpool       vg_vm_ssd  <424.56g   thin-pool  0.00    10.42
+```
+
+The original NVMe-backed `pve` volume group was unchanged.
+
+### Proxmox storage registration
+
+The resulting `/etc/pve/storage.cfg` entry is:
+
+```text
+lvmthin: vm-ssd
+        thinpool thinpool
+        vgname vg_vm_ssd
+        content images,rootdir
+```
+
+`pvesm status` reported:
+
+```text
+Name       Type      Status   Total (KiB)   Used (KiB)   Available (KiB)   %
+vm-ssd     lvmthin   active      445181952            0          445181952   0.00%
+```
+
+This corresponds to approximately 424.56 GiB of thin-provisioned VM/LXC capacity at creation time.
+
+### Resulting storage design
+
+```text
+256 GB WDC NVMe
+├── Proxmox OS
+├── local
+└── local-lvm
+
+480 GB Kingston A400 SATA SSD (/dev/sda)
+└── vg_vm_ssd
+    ├── thinpool (~424.56 GiB)
+    │   └── vm-ssd
+    │       └── VM images + LXC root disks
+    └── ~22.36 GiB VG free reserve
+```
+
+### Acceptance
+
+- `vm-ssd` reports **active** in Proxmox.
+- Storage is configured for `images` and `rootdir` content.
+- Initial thin-pool data usage is 0%.
+- The Proxmox OS/NVMe storage layout was not modified.
+- The legacy NTFS filesystem is no longer present.
+- Approximately 22.36 GiB remains unallocated within `vg_vm_ssd` as reserve capacity.
+- The Kingston SSD is now ready for VM/LXC workloads.
+- The SSD remains local host storage and is **not** considered an off-host backup destination.
+
+### Next actions
+
+1. Review/update HP Q23 BIOS when the maintenance window allows.
+2. Add the Proxmox node exporter target to central Prometheus/Grafana.
+3. Continue host security baseline work.
+4. Select and validate an off-host backup destination before production workload migration.
+5. Continue IaC foundation and disposable VM proof using the new `vm-ssd` tier where appropriate.
