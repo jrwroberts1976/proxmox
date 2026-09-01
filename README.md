@@ -78,6 +78,8 @@ This repository tracks the build, configuration, migration, and operational runb
 - [ ] Start and commission VM `101`
 - [ ] Reserve/approve final VM `101` network identity
 - [ ] Hand VM `101` to Ansible Linux baseline
+- [ ] Apply validated Linux security hardening to VM `101` and revalidate SSH/ICMP controls
+- [ ] Re-run matching Greenbone checks after VM `101` hardening
 - [ ] Review/update HP BIOS firmware
 - [ ] Add Proxmox target to central Prometheus/Grafana
 - [ ] Host security baseline
@@ -123,10 +125,19 @@ Planned workloads include a Debian Docker VM, Home Assistant OS VM, and future t
 
 ## Initial application-platform build sequence
 
-The first IaC application-platform proof follows these runbooks in order:
+The first IaC application-platform proof follows these controlled gates in order:
 
 ```text
 Linux VM IaC deployment
+        |
+        v
+Guest commissioning / cloud-init acceptance
+        |
+        v
+Linux security hardening
+        |
+        v
+Observability / baseline acceptance
         |
         v
 PostgreSQL
@@ -138,6 +149,8 @@ TimescaleDB
 Nginx
 ```
 
+Security hardening is a required build gate, not an optional post-install activity. The validated Ansible role removes the two weak UMAC-64 SSH MAC algorithms and blocks IPv4 ICMP timestamp requests while preserving normal SSH and ping. PostgreSQL must not be installed until the hardening and security-validation gates pass.
+
 Each component has its own validation, idempotence, acceptance and rollback gates. The first deployment remains disposable until backup/recovery and observability gates are passed.
 
 ## Documentation
@@ -147,6 +160,7 @@ Each component has its own validation, idempotence, acceptance and rollback gate
 - [`docs/build-log.md`](docs/build-log.md) — chronological implementation record of changes performed on the live host.
 - [`docs/debian13-template-vm101-opentofu.md`](docs/debian13-template-vm101-opentofu.md) — exact Debian 13 template `9000` and OpenTofu VM `101` build, API permissions, state separation, saved-plan review/apply and validation procedure.
 - [`runbooks/linux-vm-iac-deployment.md`](runbooks/linux-vm-iac-deployment.md) — deploy a Debian 13 Proxmox VM through OpenTofu/Terraform, cloud-init and the `vm-ssd` storage tier, then hand it to Ansible.
+- [`runbooks/linux-vm-security-hardening.md`](runbooks/linux-vm-security-hardening.md) — mandatory VM build security gate using the validated Ansible SSH UMAC-64 and ICMP timestamp controls, including validation, idempotence, Greenbone closure and rollback.
 - [`runbooks/postgresql-install.md`](runbooks/postgresql-install.md) — deploy and validate the repository PostgreSQL Ansible role, database/users, access controls, idempotence and rollback gates.
 - [`runbooks/timescaledb-install.md`](runbooks/timescaledb-install.md) — deploy TimescaleDB on PostgreSQL, validate preload/extension/hypertables, and control tuning/upgrades.
 - [`runbooks/nginx-install.md`](runbooks/nginx-install.md) — deploy Nginx sites/reverse proxies through Ansible with configuration testing, exposure/security and rollback gates.
@@ -156,4 +170,4 @@ Each component has its own validation, idempotence, acceptance and rollback gate
 - [`runbooks/prometheus-install.md`](runbooks/prometheus-install.md) — deploy the central Prometheus service, persistent TSDB, remote-write receiver, validation and Grafana integration.
 - [`runbooks/loki-install.md`](runbooks/loki-install.md) — deploy the central Loki log store, persistent storage, Alloy ingestion path and Grafana integration.
 - [`runbooks/linux-vm-observability-bootstrap.md`](runbooks/linux-vm-observability-bootstrap.md) — standard metrics + logs commissioning procedure for every new Linux VM.
-- [`ansible/linux-security-hardening/README.md`](ansible/linux-security-hardening/README.md) — validated Ansible runbook for OpenSSH UMAC-64 removal and persistent ICMP timestamp-request blocking on Debian/Proxmox hosts.
+- [`ansible/linux-security-hardening/README.md`](ansible/linux-security-hardening/README.md) — validated Ansible implementation for OpenSSH UMAC-64 removal and persistent ICMP timestamp-request blocking on Debian/Proxmox hosts.
