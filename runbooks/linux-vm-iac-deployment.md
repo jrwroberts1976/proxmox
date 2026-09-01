@@ -4,19 +4,27 @@
 
 This runbook defines the controlled procedure for deploying a new Debian Linux VM on the Proxmox platform using Infrastructure as Code.
 
-The VM must be created through OpenTofu/Terraform, bootstrapped with cloud-init, and handed over to Ansible for operating-system and service configuration. Manual VM creation in the Proxmox GUI is not the normal deployment path.
+The VM must be created through OpenTofu/Terraform, bootstrapped with cloud-init, handed over to Ansible for operating-system configuration, and pass the validated Linux security-hardening gate before application services are installed. Manual VM creation in the Proxmox GUI is not the normal deployment path.
 
-This is the first runbook in the application-platform build sequence:
+The application-platform build sequence is:
 
 ```text
 1. Linux VM IaC deployment
         |
-2. PostgreSQL
+2. Guest commissioning / cloud-init acceptance
         |
-3. TimescaleDB
+3. Linux security hardening
         |
-4. Nginx
+4. Observability / baseline acceptance
+        |
+5. PostgreSQL
+        |
+6. TimescaleDB
+        |
+7. Nginx
 ```
+
+Security hardening is part of the build, not an optional post-install activity.
 
 ---
 
@@ -56,13 +64,14 @@ This sizing is for build and validation. Revisit RAM before treating PostgreSQL/
 1. Git is the source of truth.
 2. Use OpenTofu/Terraform for VM lifecycle.
 3. Use cloud-init only for first-boot bootstrap and access.
-4. Use Ansible for ongoing OS and application configuration.
+4. Use Ansible for ongoing OS, security and application configuration.
 5. Store VM disks on `vm-ssd` unless a documented exception exists.
 6. Do not commit Proxmox API tokens, SSH private keys, passwords, Terraform/OpenTofu state secrets, or Ansible Vault passwords.
 7. Plan must be reviewed before apply.
 8. The first deployment must be disposable.
-9. Observability must be commissioned before the VM is accepted for production use.
-10. Destruction must only be performed against a VM explicitly confirmed as disposable.
+9. The validated Linux security-hardening gate must pass before PostgreSQL, TimescaleDB or Nginx installation.
+10. Observability must be commissioned before the VM is accepted for production use.
+11. Destruction must only be performed against a VM explicitly confirmed as disposable.
 
 ---
 
@@ -334,40 +343,86 @@ qm agent <VM_ID> ping
 
 ## 17. Add inventory only after IaC acceptance
 
-Add the host to the appropriate inventory groups only after the VM passes Stage 5.
+Add the host to the appropriate Ansible inventory only after the VM passes Stage 5.
+
+For security hardening the host must be present in the `linux_security_hardening` group. For VM101, use its approved address rather than guessing one.
 
 Example:
 
 ```yaml
 all:
   children:
-    postgresql_servers:
+    linux_security_hardening:
       hosts:
-        db-01:
+        app-platform-01:
           ansible_host: <VM_IP>
-    timescaledb_servers:
-      hosts:
-        db-01:
-    nginx_servers:
-      hosts:
-        db-01:
+          ansible_user: james
+          ansible_become: true
 ```
 
 Validate:
 
 ```bash
-cd ansible
-ansible-inventory --graph
-ansible all -m ping --limit <VM_NAME>
+cd ansible/linux-security-hardening
+ansible-playbook -i inventory.yml playbook.yml --syntax-check
+ansible -i inventory.yml linux_security_hardening -m ping --limit <VM_NAME>
 ```
 
-The next runbook is `runbooks/postgresql-install.md`.
+Do not continue if Ansible cannot reach the VM.
 
 ---
 
-# Stage 7 - Observability gate
+# Stage 7 - Mandatory Linux security hardening
 
-## 18. Commission monitoring before production acceptance
+## 18. Apply the validated hardening role
+
+Use:
+
+```text
+runbooks/linux-vm-security-hardening.md
+```
+
+The authoritative Ansible implementation is:
+
+```text
+ansible/linux-security-hardening/
+```
+
+The currently validated controls are intentionally narrow:
+
+1. Remove `umac-64-etm@openssh.com` and `umac-64@openssh.com` from the effective OpenSSH MAC policy.
+2. Persistently block IPv4 ICMP timestamp requests through `homelab-icmp-timestamp-block.service`.
+
+The role does not enable a global firewall and does not disable TCP timestamps.
+
+For the first deployment, run only against the new VM:
+
+```bash
+cd ansible/linux-security-hardening
+ansible-playbook \
+  -i inventory.yml \
+  playbook.yml \
+  --limit <VM_NAME> \
+  --ask-become-pass
+```
+
+After the run:
+
+- establish a fresh SSH session;
+- verify both UMAC-64 algorithms are absent;
+- verify the ICMP timestamp DROP rule exists;
+- verify normal ping still works;
+- verify ICMP timestamp probes receive no timestamp reply;
+- run the playbook a second time and prove idempotence;
+- re-run the matching Greenbone checks.
+
+Do not proceed to PostgreSQL until this gate passes.
+
+---
+
+# Stage 8 - Observability gate
+
+## 19. Commission monitoring before production acceptance
 
 Use:
 
@@ -384,11 +439,11 @@ The VM is not production-ready until:
 
 ---
 
-# Stage 8 - Idempotence and drift
+# Stage 9 - Idempotence and drift
 
-## 19. Re-plan
+## 20. Re-plan
 
-After successful creation:
+After successful creation and baseline configuration:
 
 ```bash
 tofu plan
@@ -400,9 +455,9 @@ Do not make persistent VM configuration changes in the Proxmox GUI. If a change 
 
 ---
 
-# Stage 9 - Rollback
+# Stage 10 - Rollback
 
-## 20. Disposable VM rollback
+## 21. Disposable VM rollback
 
 Only if the VM is explicitly disposable and contains no required data:
 
@@ -429,9 +484,9 @@ Never destroy a database VM with retained data without first proving the backup/
 
 ---
 
-## 21. Acceptance criteria
+## 22. Acceptance criteria
 
-The Linux VM deployment is complete when:
+The Linux VM build is complete when:
 
 - [ ] VM exists only because it is declared in IaC.
 - [ ] OpenTofu validate passes.
@@ -442,8 +497,14 @@ The Linux VM deployment is complete when:
 - [ ] cloud-init completed successfully.
 - [ ] QEMU guest agent works where enabled.
 - [ ] `systemctl --failed` is clean or exceptions are documented.
-- [ ] A post-apply OpenTofu plan is clean.
 - [ ] Ansible can reach the VM.
+- [ ] Validated Linux security-hardening playbook completes successfully.
+- [ ] Fresh SSH access succeeds after hardening.
+- [ ] Weak UMAC-64 SSH MAC algorithms are absent.
+- [ ] ICMP timestamp requests are blocked while normal ping remains functional.
+- [ ] Hardening playbook is idempotent on a second run.
+- [ ] Matching Greenbone findings are cleared or formally documented.
 - [ ] Monitoring/logging commissioning is scheduled or complete.
+- [ ] A post-apply OpenTofu plan is clean.
 
 Only then proceed to PostgreSQL installation.
