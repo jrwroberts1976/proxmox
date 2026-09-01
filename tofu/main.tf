@@ -8,7 +8,7 @@ resource "proxmox_virtual_environment_vm" "app_platform" {
 
   # First deployment remains stopped until the plan and host
   # memory position have been reviewed.
-  started             = false
+  started             = true
   on_boot             = false
   stop_on_destroy     = true
   reboot_after_update = false
