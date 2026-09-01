@@ -66,8 +66,9 @@ resource "proxmox_virtual_environment_vm" "app_platform" {
   }
 
   network_device {
-    bridge = var.bridge
-    model  = "virtio"
+    bridge      = var.bridge
+    model       = "virtio"
+    mac_address = var.mac_address
   }
 
   operating_system {

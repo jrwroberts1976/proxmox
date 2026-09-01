@@ -58,3 +58,9 @@ variable "disk_size_gb" {
   type    = number
   default = 64
 }
+
+variable "mac_address" {
+  type        = string
+  description = "Stable MAC address for VM101 DHCP identity."
+  default     = "BC:24:11:08:A2:33"
+}
