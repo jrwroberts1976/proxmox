@@ -174,10 +174,13 @@
     timeout: 5
   changed_when: false
 
+# Do not use Ansible become_user here. Becoming from root to another
+# unprivileged account requires Ansible to make its remote temporary module
+# files readable by that account and can depend on host ACL tooling. runuser
+# executes the validation as the Alloy service account without that unrelated
+# temporary-file permission dependency.
 - name: Confirm Alloy can read the systemd journal
   ansible.builtin.command:
-    cmd: journalctl -n 1 --no-pager
-  become: true
-  become_user: alloy
+    cmd: runuser -u alloy -- journalctl -n 1 --no-pager
   changed_when: false
   when: alloy_journal_logs_enabled | bool
