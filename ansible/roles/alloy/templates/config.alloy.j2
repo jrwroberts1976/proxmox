@@ -7,9 +7,22 @@ prometheus.exporter.unix "linux" {
 discovery.relabel "linux" {
   targets = prometheus.exporter.unix.linux.targets
 
+  // Canonical host identity used by new queries and alerts.
   rule {
     target_label = "hostname"
     replacement  = "{{ alloy_hostname }}"
+  }
+
+  // Compatibility identity used by the established Linux OS dashboard.
+  rule {
+    target_label = "host"
+    replacement  = "{{ alloy_linux_metrics_host_label }}"
+  }
+
+  // Normalize the Alloy scrape job to the existing Linux dashboard/job model.
+  rule {
+    target_label = "job"
+    replacement  = "{{ alloy_linux_metrics_job }}"
   }
 
   rule {
