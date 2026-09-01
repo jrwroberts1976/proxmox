@@ -15,7 +15,7 @@ VM_NAME="app-platform-01"
 VM_IP="192.168.2.253"
 VM_MAC="BC:24:11:08:A2:33"
 
-TEMPLATE_VMID="9000"
+TEMPLATE_VMID="9001"
 TEMP_VMID="9901"
 
 PVE_HOST="192.168.2.70"
@@ -68,7 +68,13 @@ PVE_SSH=(
 )
 
 
+TEMPLATE_PROBE_CREATED=0
+
 cleanup_template_probe() {
+    if [[ "${TEMPLATE_PROBE_CREATED:-0}" -ne 1 ]]; then
+        return 0
+    fi
+
     set +e
 
     "${PVE_SSH[@]}" "
@@ -81,6 +87,8 @@ cleanup_template_probe() {
               >/dev/null 2>&1 || true
         fi
     " >/dev/null 2>&1
+
+    TEMPLATE_PROBE_CREATED=0
 
     set -e
 }
@@ -254,14 +262,17 @@ pass "OpenTofu init/fmt/validate"
 
 
 echo
-echo "===== CURRENT DRIFT GATE ====="
+echo "===== CURRENT DRIFT / TEMPLATE MIGRATION GATE ====="
+
+PREFLIGHT_PLAN="$WORK_ROOT/preflight.tfplan"
+PREFLIGHT_JSON="$WORK_ROOT/preflight.tfplan.json"
 
 set +e
 
 tofu plan \
   -input=false \
   -detailed-exitcode \
-  -out="$WORK_ROOT/preflight.tfplan"
+  -out="$PREFLIGHT_PLAN"
 
 PREFLIGHT_RC=$?
 
@@ -269,23 +280,64 @@ set -e
 
 echo "preflight_plan_rc=$PREFLIGHT_RC"
 
-[[ "$PREFLIGHT_RC" -eq 0 ]] || \
-    fail \
-      "current infrastructure has drift or plan failed; VM101 will not be destroyed"
+case "$PREFLIGHT_RC" in
 
-pass "current infrastructure matches OpenTofu"
+    0)
+        pass "current infrastructure matches OpenTofu"
+        ;;
+
+    2)
+        tofu show -json "$PREFLIGHT_PLAN" > "$PREFLIGHT_JSON"
+
+        if jq -e \
+          --arg resource "$RESOURCE" \
+          --argjson old_template 9000 \
+          --argjson new_template "$TEMPLATE_VMID" '
+            [
+              .resource_changes[]?
+              | select(.change.actions != ["no-op"])
+            ] as $changes
+            |
+            ($changes | length) == 1
+            and $changes[0].address == $resource
+            and $changes[0].change.actions == ["delete", "create"]
+            and $changes[0].change.replace_paths == [["clone", 0, "vm_id"]]
+            and $changes[0].change.before.clone[0].vm_id == $old_template
+            and $changes[0].change.after.clone[0].vm_id == $new_template
+          ' "$PREFLIGHT_JSON" >/dev/null
+        then
+            echo "template_migration=9000->$TEMPLATE_VMID"
+            pass "controlled template-only replacement accepted"
+        else
+            echo "Unexpected pre-flight changes:"
+
+            jq -r '
+              .resource_changes[]?
+              | select(.change.actions != ["no-op"])
+              | "resource=\(.address) actions=\(.change.actions) replace_paths=\(.change.replace_paths)"
+            ' "$PREFLIGHT_JSON"
+
+            fail "unexpected infrastructure drift; VM101 will not be destroyed"
+        fi
+        ;;
+
+    *)
+        fail "OpenTofu pre-flight plan failed with rc=$PREFLIGHT_RC"
+        ;;
+
+esac
 
 
 echo
-echo "===== TEMPLATE 9000 GUEST-AGENT SMOKE GATE ====="
-
-cleanup_template_probe
+echo "===== TEMPLATE 9001 GUEST-AGENT SMOKE GATE ====="
 
 if "${PVE_SSH[@]}" \
      "qm status '$TEMP_VMID' >/dev/null 2>&1"
 then
-    fail "temporary VMID $TEMP_VMID already exists"
+    fail "temporary VMID $TEMP_VMID already exists; refusing to remove or reuse it"
 fi
+
+TEMPLATE_PROBE_CREATED=1
 
 
 "${PVE_SSH[@]}" "
@@ -333,9 +385,9 @@ cleanup_template_probe
 
 [[ "$TEMPLATE_AGENT_READY" -eq 1 ]] || \
     fail \
-      "template 9000 does not provide a working qemu-guest-agent; VM101 has not been touched"
+      "template 9001 does not provide a working qemu-guest-agent; VM101 has not been touched"
 
-pass "template 9000 guest agent"
+pass "template 9001 guest agent"
 
 
 echo

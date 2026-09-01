@@ -15,7 +15,7 @@ variable "vm_name" {
 
 variable "template_vm_id" {
   type    = number
-  default = 9000
+  default = 9001
 }
 
 variable "datastore_id" {
