@@ -1,500 +1,298 @@
-# Prometheus Installation Runbook
+# Prometheus Installation and Operations Runbook
 
 ## 1. Purpose
 
-This runbook defines the standard procedure for deploying Prometheus as the central metrics store/query service for the Proxmox homelab.
-
-The target architecture is:
+This runbook defines the current Prometheus standard for the Proxmox homelab and records the authoritative deployment that new Alloy-managed VMs must use.
 
 ```text
-Linux hosts / VMs
-   |
-   +--> Alloy prometheus.exporter.unix
-   |       |
-   |       +--> prometheus.remote_write
-   |
-   +--> direct exporters where required
-           |
-           v
-Debian monitoring / Docker VM
-           |
-           +--> Prometheus :9090
-           |
-           +--> Grafana
+Alloy-managed Linux VMs
+        |
+        +--> prometheus.remote_write
+                  |
+                  v
+           ids-01 Prometheus
+                  |
+                  v
+               Grafana
 ```
 
-Prometheus remains the source queried by Grafana for infrastructure metrics. The homelab standard also allows Alloy hosts to send Linux metrics to the Prometheus remote-write receiver.
+Existing direct exporters may still be scraped normally. New Proxmox VM host metrics should use Alloy remote write unless a documented exception exists.
 
 ---
 
-## 2. Scope
+## 2. Current authoritative deployment
 
-This runbook covers:
-
-- Docker Compose deployment on the monitoring VM;
-- persistent TSDB storage;
-- baseline Prometheus configuration;
-- enabling the remote-write receiver for Alloy clients;
-- safe configuration validation;
-- reload/restart procedures;
-- health and API validation;
-- Grafana datasource configuration;
-- backup and retention considerations;
-- upgrade, rollback, and troubleshooting;
-- future IaC automation.
-
-It does not define every scrape target or alert rule. Service-specific exporters and alert rules should be added after the Prometheus service is healthy.
-
----
-
-## 3. Standard
-
-| Item | Standard |
-|---|---|
-| Deployment | Docker Compose |
-| Container image | `prom/prometheus:<PINNED_VERSION>` |
-| Container port | `9090` |
-| Host/LAN port | `9090` |
-| Config path in container | `/etc/prometheus/prometheus.yml` |
-| TSDB path | `/prometheus` |
-| Initial retention | `30d` unless capacity evidence supports another value |
-| Config validation | `promtool check config` |
-| Reload endpoint | `POST /-/reload` |
-| Remote-write receiver | Enabled |
-| Alloy write endpoint | `http://<MONITORING_VM_IP>:9090/api/v1/write` |
-| Grafana datasource | `http://prometheus:9090` on internal Docker network |
-
-Pin a tested Prometheus version. Do not deploy `latest` as the operational standard.
-
----
-
-## 4. Security principles
-
-1. TCP `9090` must not be directly exposed to the Internet.
-2. Restrict access to trusted LAN/management networks.
-3. Alloy clients need access to `/api/v1/write` when using remote write.
-4. Grafana should use the internal Docker network where possible.
-5. If authentication/TLS is required across a trust boundary, use an approved reverse proxy or Prometheus web configuration rather than exposing an unauthenticated service publicly.
-6. Do not put credentials or private keys in Git plaintext.
-
----
-
-## 5. Preconditions
-
-Confirm:
-
-- [ ] Monitoring VM is healthy.
-- [ ] Docker Engine is healthy.
-- [ ] Docker Compose v2 is available.
-- [ ] Persistent storage is available.
-- [ ] TCP `9090` is unused.
-- [ ] A tested Prometheus version is selected.
-- [ ] Grafana location/network is known.
-- [ ] Intended retention fits available disk.
-- [ ] Time synchronisation on the monitoring VM is healthy.
-
-Capture:
+Verified 2026-09-01:
 
 ```text
-MONITORING_VM_IP=
-PROMETHEUS_VERSION=
-PROMETHEUS_STACK_PATH=
-PROMETHEUS_RETENTION=30d
+Host:                 ids-01
+LAN IP:               192.168.2.242
+Prometheus image:     prom/prometheus:v3.13.1
+Published port:       9090
+Compose project:      /home/james/docker/stacks/monitoring
+Compose file:         /home/james/docker/stacks/monitoring/docker-compose.yml
+Configuration mount: /home/james/docker/data/monitoring/prometheus -> /etc/prometheus
+TSDB mount:           /home/james/docker/data/monitoring/prometheus/data -> /prometheus
+Grafana datasource:   http://prometheus:9090
 ```
 
----
-
-# Stage 1 - Prepare stack
-
-## 6. Create directories
-
-Example:
-
-```bash
-sudo mkdir -p /opt/homelab-observability/prometheus/config
-sudo chown -R "$USER":"$USER" /opt/homelab-observability
-cd /opt/homelab-observability/prometheus
-```
-
-Recommended structure:
+Running command flags include:
 
 ```text
-prometheus/
-├── compose.yml
-├── config/
-│   ├── prometheus.yml
-│   └── rules/
-└── README.md              # optional local operations note
-```
-
-If an authoritative monitoring-stack repository already exists, use that location instead.
-
----
-
-# Stage 2 - Baseline configuration
-
-## 7. Create `prometheus.yml`
-
-Create `config/prometheus.yml`:
-
-```yaml
-global:
-  scrape_interval: 15s
-  evaluation_interval: 15s
-  external_labels:
-    environment: homelab
-    prometheus: central
-
-rule_files:
-  - /etc/prometheus/rules/*.yml
-
-scrape_configs:
-  - job_name: prometheus
-    static_configs:
-      - targets:
-          - localhost:9090
-```
-
-Create the rules directory even if it is initially empty:
-
-```bash
-mkdir -p config/rules
-```
-
-This baseline intentionally starts small. Add node exporters, application exporters, and alert rules only after Prometheus itself passes acceptance checks.
-
----
-
-# Stage 3 - Docker Compose definition
-
-## 8. Create Compose service
-
-Create `compose.yml`:
-
-```yaml
-services:
-  prometheus:
-    image: prom/prometheus:<PINNED_VERSION>
-    container_name: prometheus
-    restart: unless-stopped
-    command:
-      - --config.file=/etc/prometheus/prometheus.yml
-      - --storage.tsdb.path=/prometheus
-      - --storage.tsdb.retention.time=30d
-      - --web.enable-lifecycle
-      - --web.enable-remote-write-receiver
-    ports:
-      - "9090:9090"
-    volumes:
-      - ./config/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-      - ./config/rules:/etc/prometheus/rules:ro
-      - prometheus-data:/prometheus
-    networks:
-      - observability
-
-volumes:
-  prometheus-data:
-
-networks:
-  observability:
-    name: observability
-```
-
-Replace `<PINNED_VERSION>` with the approved version.
-
-### Required flag for Alloy metrics
-
-Prometheus 3 uses the dedicated flag:
-
-```text
+--config.file=/etc/prometheus/prometheus.yml
+--storage.tsdb.path=/prometheus
+--web.enable-lifecycle
 --web.enable-remote-write-receiver
 ```
 
-This enables:
+The remote-write receiver was enabled and validated on 2026-09-01. After controlled recreation, the established scrape-target baseline returned to:
 
 ```text
-POST /api/v1/write
+active_targets=26
+healthy_targets=26
+unhealthy_targets=0
 ```
 
-which is required by the Alloy Linux-metrics pipeline documented in this repository.
+That target count is a health baseline for normal scrape targets. Alloy remote-written VMs do **not** appear as new entries in `/api/v1/targets` merely because their series are being received.
 
 ---
 
-# Stage 4 - Preflight validation
+## 3. Authority rule
 
-## 9. Validate Compose
+The homelab contains more than one Prometheus instance.
 
-```bash
-docker compose config
-```
+Before changing a monitoring client, verify authority by checking:
 
-Pull the selected image:
+1. where Grafana is running;
+2. Grafana's provisioned Prometheus datasource;
+3. Prometheus target/job inventory;
+4. the intended Loki/Grafana pairing.
 
-```bash
-docker compose pull prometheus
-```
-
-### Validate Prometheus YAML with the pinned image
-
-```bash
-docker run --rm \
-  --entrypoint /bin/promtool \
-  -v "$PWD/config:/etc/prometheus:ro" \
-  prom/prometheus:<PINNED_VERSION> \
-  check config /etc/prometheus/prometheus.yml
-```
-
-Expected result includes:
-
-```text
-SUCCESS
-```
-
-Do not start or reload Prometheus with an invalid configuration.
+Current authority is `ids-01`. Do not point new VMs at TestServer Prometheus by default.
 
 ---
 
-# Stage 5 - Start Prometheus
+## 4. Standard endpoints
 
-## 10. Deploy
+| Purpose | URL |
+|---|---|
+| LAN readiness | `http://192.168.2.242:9090/-/ready` |
+| LAN health | `http://192.168.2.242:9090/-/healthy` |
+| Query API | `http://192.168.2.242:9090/api/v1/query` |
+| Remote write | `http://192.168.2.242:9090/api/v1/write` |
+| Grafana internal datasource | `http://prometheus:9090` |
 
-```bash
-docker compose up -d prometheus
-```
-
-Check:
-
-```bash
-docker compose ps
-docker logs --tail 100 prometheus
-```
-
-Expected result: Prometheus remains running without repeated TSDB or configuration errors.
+TCP/9090 must not be Internet-exposed.
 
 ---
 
-# Stage 6 - Health validation
+# Stage 0 - Pre-change baseline
 
-## 11. Readiness and health
+Before changing Compose, configuration, image or flags:
 
 ```bash
+cd /home/james/docker/stacks/monitoring
+
+docker compose config -q
+docker inspect prometheus --format '{{.Config.Image}}'
+docker inspect prometheus --format '{{range .Config.Cmd}}{{println .}}{{end}}'
 curl -fsS http://127.0.0.1:9090/-/ready
-curl -fsS http://127.0.0.1:9090/-/healthy
 ```
 
-Check runtime information:
+Capture the target baseline:
 
 ```bash
-curl -fsS http://127.0.0.1:9090/api/v1/status/runtimeinfo | jq
+curl -fsS http://127.0.0.1:9090/api/v1/targets |
+jq -r '
+  "active=" + ((.data.activeTargets | length) | tostring),
+  "healthy=" + ([.data.activeTargets[] | select(.health == "up")] | length | tostring),
+  "unhealthy=" + ([.data.activeTargets[] | select(.health != "up")] | length | tostring)
+'
 ```
 
-Check build information:
-
-```bash
-curl -fsS http://127.0.0.1:9090/api/v1/status/buildinfo | jq
-```
-
-Check listening socket:
-
-```bash
-ss -ltnp | grep ':9090'
-```
+Do not assume a different target count is automatically a failure after future architecture changes; compare with the pre-change baseline for that specific maintenance window.
 
 ---
 
-# Stage 7 - Validate self-scrape
+# Stage 1 - Configuration changes
 
-## 12. Query `up`
+Prometheus configuration authority is the host-mounted Git-managed monitoring stack, not the container filesystem.
 
-```bash
-curl -fsS --get \
-  http://127.0.0.1:9090/api/v1/query \
-  --data-urlencode 'query=up{job="prometheus"}' \
-  | jq
-```
-
-Expected value:
-
-```text
-1
-```
-
-Prometheus should be able to monitor itself before other targets are added.
-
----
-
-# Stage 8 - Validate remote-write receiver
-
-## 13. Confirm Alloy network path
-
-From an Alloy-enabled Linux host:
-
-```bash
-curl -fsS http://<MONITORING_VM_IP>:9090/-/ready
-```
-
-Optional TCP check:
-
-```bash
-nc -vz <MONITORING_VM_IP> 9090
-```
-
-The remote-write API is a POST/protobuf endpoint, so a browser-style GET is not a functional write test.
-
-The end-to-end write test is performed by enabling an Alloy pipeline and checking that a `node_*` metric arrives in Prometheus.
-
-### Expected Alloy endpoint
-
-```alloy
-prometheus.remote_write "homelab" {
-  endpoint {
-    url = "http://<MONITORING_VM_IP>:9090/api/v1/write"
-  }
-}
-```
-
----
-
-# Stage 9 - Add Grafana datasource
-
-## 14. Grafana connection
-
-If Grafana is attached to the same `observability` Docker network, set its Prometheus datasource URL to:
-
-```text
-http://prometheus:9090
-```
-
-Do not use the LAN address unnecessarily from an adjacent container when the internal service name is available and healthy.
-
-Test in Grafana Explore:
-
-```promql
-up{job="prometheus"}
-```
-
-Expected result: `1`.
-
-If datasource provisioning is managed in Git, make the provisioning file authoritative rather than relying on an undocumented UI change.
-
----
-
-# Stage 10 - Add scrape targets safely
-
-## 15. Configuration change workflow
-
-For every Prometheus configuration change:
-
-1. edit the Git-managed source;
-2. validate with `promtool`;
-3. review the diff;
-4. apply/reload;
-5. confirm readiness;
-6. confirm affected targets/queries.
-
-### Validate running container configuration
+Validate config before reload:
 
 ```bash
 docker exec prometheus \
   promtool check config /etc/prometheus/prometheus.yml
 ```
 
-### Reload
+Validate Compose before recreation:
 
-Because `--web.enable-lifecycle` is enabled:
+```bash
+cd /home/james/docker/stacks/monitoring
+docker compose config -q
+```
+
+Review the diff in Git before applying.
+
+---
+
+# Stage 2 - Enable remote-write receiver
+
+For Alloy Linux metrics, Prometheus must run with:
+
+```text
+--web.enable-remote-write-receiver
+```
+
+The required Compose command section includes:
+
+```yaml
+command:
+  - --config.file=/etc/prometheus/prometheus.yml
+  - --storage.tsdb.path=/prometheus
+  - --web.enable-lifecycle
+  - --web.enable-remote-write-receiver
+```
+
+The write endpoint is:
+
+```text
+POST /api/v1/write
+```
+
+Do not confuse the receiver flag with Prometheus `remote_write` configuration used to send Prometheus data to another backend.
+
+---
+
+# Stage 3 - Controlled Prometheus-only recreation
+
+When a command-line flag changes, recreate only Prometheus:
+
+```bash
+cd /home/james/docker/stacks/monitoring
+
+docker compose up \
+  -d \
+  --no-deps \
+  --force-recreate \
+  prometheus
+```
+
+Do not restart Loki/Grafana unnecessarily.
+
+Wait for readiness:
+
+```bash
+for i in $(seq 1 30); do
+  if curl -fsS http://127.0.0.1:9090/-/ready >/dev/null 2>&1; then
+    echo PASS
+    break
+  fi
+  sleep 2
+done
+```
+
+Then verify the running flags:
+
+```bash
+docker inspect prometheus \
+  --format '{{range .Config.Cmd}}{{println .}}{{end}}'
+```
+
+---
+
+# Stage 4 - Wait for scrape discovery to settle
+
+Immediately after a recreate, `/api/v1/targets` may temporarily show zero active targets, followed by a gradual recovery as service discovery and scrapes resume.
+
+Do not declare a regression from the first post-start API sample.
+
+Poll until the expected baseline returns:
+
+```bash
+for i in $(seq 1 24); do
+  JSON="$(curl -fsS http://127.0.0.1:9090/api/v1/targets)"
+  ACTIVE="$(printf '%s' "$JSON" | jq '.data.activeTargets | length')"
+  HEALTHY="$(printf '%s' "$JSON" | jq '[.data.activeTargets[] | select(.health == "up")] | length')"
+  UNHEALTHY="$(printf '%s' "$JSON" | jq '[.data.activeTargets[] | select(.health != "up")] | length')"
+  printf 'attempt=%s active=%s healthy=%s unhealthy=%s\n' "$i" "$ACTIVE" "$HEALTHY" "$UNHEALTHY"
+  sleep 5
+done
+```
+
+During the 2026-09-01 receiver change, ids-01 recovered from `0/0` through intermediate unhealthy states to the established `26/26` healthy baseline.
+
+---
+
+# Stage 5 - Validate Alloy client path
+
+From a new VM:
+
+```bash
+curl -fsS http://192.168.2.242:9090/-/ready
+```
+
+The functional receiver test is not a GET to `/api/v1/write`. Enable the Alloy remote-write pipeline and prove a metric arrives.
+
+Use:
+
+```promql
+node_uname_info{hostname="<HOSTNAME>"}
+```
+
+For VM101, the validated runtime result was one series with:
+
+```text
+hostname=app-platform-01
+instance=app-platform-01
+job=integrations/unix
+role=application
+environment=homelab
+```
+
+Core metrics were also present for memory, boot time, CPU and filesystem.
+
+---
+
+# Stage 6 - Grafana datasource
+
+Current datasource provisioning on ids-01 uses:
+
+```text
+http://prometheus:9090
+```
+
+That is correct because Grafana and Prometheus share the monitoring Docker network.
+
+Do not replace this with a LAN address merely to match remote Alloy clients. The client and Grafana network contexts are different.
+
+---
+
+# Stage 7 - Safe reload
+
+For ordinary `prometheus.yml` changes that do not alter container command flags:
+
+1. edit Git-managed source;
+2. validate with `promtool`;
+3. review diff;
+4. POST lifecycle reload;
+5. verify readiness and affected targets.
 
 ```bash
 curl -fsS -X POST http://127.0.0.1:9090/-/reload
 ```
 
-Check logs immediately afterwards:
+Check logs:
 
 ```bash
 docker logs --tail 100 prometheus
 ```
 
-Prometheus will reject a malformed reload, but pre-validation remains mandatory.
-
 ---
 
-# Stage 11 - Persistence
+# Stage 8 - Upgrade
 
-## 16. Verify TSDB volume
-
-```bash
-docker volume inspect prometheus-data
-```
-
-Restart:
-
-```bash
-docker compose restart prometheus
-```
-
-Recheck:
-
-```bash
-curl -fsS http://127.0.0.1:9090/-/ready
-```
-
-Confirm previously stored data remains queryable after restart.
-
-Do not use an ephemeral container filesystem for Prometheus TSDB data.
-
----
-
-# Stage 12 - Retention and capacity
-
-## 17. Initial retention
-
-The baseline uses:
-
-```text
---storage.tsdb.retention.time=30d
-```
-
-This is an initial operating value, not a permanent guarantee.
-
-Monitor:
-
-- volume size;
-- growth per day/week;
-- active series count;
-- scrape volume;
-- Alloy remote-write volume;
-- available disk space.
-
-Adjust retention only from measured capacity data.
-
-Disk exhaustion of the monitoring VM is a higher operational risk than losing old metrics.
-
----
-
-# Stage 13 - Monitoring Prometheus
-
-## 18. Minimum service checks
-
-Monitor Prometheus for:
-
-- service/container availability;
-- readiness;
-- restart count;
-- TSDB disk usage;
-- scrape failures;
-- rule evaluation failures;
-- remote-write receiver errors;
-- CPU and memory;
-- config reload failures.
-
-Useful built-in metric families include Prometheus process, TSDB, scrape, and rule metrics exposed on `/metrics`.
-
----
-
-# Stage 14 - Upgrade
-
-## 19. Controlled upgrade
-
-Before change:
+Before upgrading:
 
 ```bash
 docker inspect prometheus --format '{{.Config.Image}}'
@@ -503,213 +301,104 @@ curl -fsS http://127.0.0.1:9090/-/ready
 
 Then:
 
-1. review Prometheus release/migration notes;
-2. update the pinned version in Git;
-3. validate configuration using the new image;
-4. pull the image;
-5. recreate Prometheus;
-6. verify readiness;
-7. verify self-scrape;
-8. verify Alloy-fed Linux metrics;
-9. verify Grafana queries and alerts.
+1. review release notes;
+2. update the pinned image in Git;
+3. run `docker compose config -q`;
+4. validate Prometheus config using the selected image where required;
+5. pull/recreate only Prometheus;
+6. wait for target baseline recovery;
+7. verify Alloy-fed metrics;
+8. verify Grafana and alerts.
 
-Example:
-
-```bash
-docker compose pull prometheus
-docker compose up -d prometheus
-```
-
-Prometheus major-version changes require specific attention to migration notes and removed/renamed command-line flags.
-
----
-
-# Rollback
-
-## 20. Roll back image/configuration
-
-If an upgrade/configuration change fails:
-
-1. restore the last known-good config from Git;
-2. restore the previous pinned image version;
-3. run `promtool check config` with that version;
-4. recreate Prometheus;
-5. check readiness;
-6. check stored data;
-7. check Alloy-fed metrics;
-8. check Grafana.
-
-Do not delete the TSDB volume during a normal rollback.
+Never use `latest` for the operational monitoring authority.
 
 ---
 
 # Troubleshooting
 
-## 21. Prometheus container exits
+## Alloy can reach 9090 but metrics do not arrive
+
+Check:
 
 ```bash
-docker logs prometheus
-docker compose config
+docker inspect prometheus \
+  --format '{{range .Config.Cmd}}{{println .}}{{end}}' |
+grep -- '--web.enable-remote-write-receiver'
 ```
-
-Then validate:
-
-```bash
-docker run --rm \
-  --entrypoint /bin/promtool \
-  -v "$PWD/config:/etc/prometheus:ro" \
-  prom/prometheus:<PINNED_VERSION> \
-  check config /etc/prometheus/prometheus.yml
-```
-
----
-
-## 22. Alloy cannot remote-write
 
 On the Alloy host:
 
 ```bash
-curl -fsS http://<MONITORING_VM_IP>:9090/-/ready
 journalctl -u alloy -n 200 --no-pager
+curl -fsS http://192.168.2.242:9090/-/ready
 ```
 
-On Prometheus:
+Query the metric directly. Do not look only at `/targets` for remote-written hosts.
 
-```bash
-docker logs --tail 200 prometheus
-```
+## Grafana reports `lookup prometheus`
 
-Confirm command line contains:
-
-```text
---web.enable-remote-write-receiver
-```
-
-Confirm Alloy URL is:
-
-```text
-http://<MONITORING_VM_IP>:9090/api/v1/write
-```
-
----
-
-## 23. Grafana error: lookup prometheus on Docker DNS
-
-Test from the Grafana container:
+Inside Grafana:
 
 ```bash
 docker exec grafana getent hosts prometheus
 ```
 
-and:
+If Docker DNS fails, troubleshoot the monitoring Docker network. Do not change LAN DNS to fix a Docker-internal service-name issue.
 
-```bash
-docker exec grafana \
-  sh -c 'wget -qO- http://prometheus:9090/-/ready || true'
-```
+## Targets temporarily unhealthy after restart
 
-If DNS resolution fails, verify:
-
-- Grafana and Prometheus share the intended Docker network;
-- the Prometheus service/container is running;
-- the Docker network is healthy;
-- service aliases/names are correct;
-- Docker embedded DNS is functioning.
-
-Do not change the external/LAN DNS system to fix a Docker-internal service-name problem.
+Wait for discovery/scrape recovery and compare with the pre-change baseline before taking corrective action.
 
 ---
 
-## 24. Prometheus is healthy but no Linux host metrics arrive
+# Rollback
 
-Query:
+For a failed Compose/flag change:
 
-```promql
-node_uname_info
-```
+1. restore the previous Git-managed Compose/config source;
+2. run `docker compose config -q`;
+3. recreate only Prometheus;
+4. verify readiness;
+5. wait for the previous target baseline;
+6. verify Grafana and Alloy-fed metrics.
 
-If missing, inspect the Alloy host pipeline:
+Do not delete TSDB data during a normal rollback.
 
-- `prometheus.exporter.unix`;
-- `discovery.relabel`;
-- `prometheus.scrape`;
-- `prometheus.remote_write`.
-
-Check Alloy logs and component health before modifying Grafana.
+Do not remove `--web.enable-remote-write-receiver` while any production Alloy client depends on it.
 
 ---
 
-# Acceptance gate
+## Acceptance checklist
 
-## 25. Completion checklist
-
-- [ ] Prometheus image version is pinned.
+- [ ] `ids-01` confirmed as authority.
+- [ ] Image pinned.
 - [ ] Compose validation passes.
-- [ ] `promtool check config` passes.
-- [ ] Prometheus remains running.
-- [ ] `/-/ready` passes.
-- [ ] `/-/healthy` passes.
-- [ ] Self-scrape returns `up == 1`.
-- [ ] TSDB storage is persistent.
-- [ ] Retention is explicitly configured.
-- [ ] TCP `9090` is not Internet-exposed.
-- [ ] Remote-write receiver is enabled.
-- [ ] An Alloy host can reach Prometheus.
-- [ ] At least one Alloy-fed `node_*` metric has been proven.
-- [ ] Grafana datasource test passes.
-- [ ] Prometheus disk monitoring is present or planned before production.
-- [ ] Configuration is committed to Git.
-- [ ] No secrets are in Git plaintext.
+- [ ] `promtool` validation passes for config changes.
+- [ ] Readiness and health pass.
+- [ ] Lifecycle flag enabled.
+- [ ] Remote-write receiver enabled.
+- [ ] Existing target baseline recovers after recreation.
+- [ ] Alloy client can reach 9090.
+- [ ] Alloy-fed `node_*` metric is queryable.
+- [ ] Grafana datasource works.
+- [ ] TSDB data remains persistent.
+- [ ] Port 9090 is not Internet-exposed.
+- [ ] Changes are source controlled.
 
 ---
 
-# Future automation target
-
-## 26. IaC model
+## Completion record
 
 ```text
-OpenTofu
-  -> monitoring VM
-cloud-init
-  -> first boot
-Ansible
-  -> Docker baseline + directories
-Docker Compose
-  -> Prometheus
-Jenkins
-  -> promtool / compose validation / controlled deployment
-```
-
-CI should reject changes when:
-
-```bash
-promtool check config
-```
-
-fails.
-
-Deployment should fail if:
-
-```bash
-curl -fsS http://127.0.0.1:9090/-/ready
-```
-
-does not succeed after apply.
-
----
-
-## 27. Completion record
-
-```text
-Monitoring VM:
-Monitoring VM IP:
-Prometheus version:
-Deployment path:
-TSDB storage:
-Retention:
-Remote-write receiver enabled: YES / NO
-Self-scrape: PASS / FAIL
-Alloy remote-write test: PASS / FAIL
+Host: ids-01
+Prometheus image/version:
+Compose path:
+Change:
+Pre-change target baseline:
+Post-change target baseline:
+Readiness: PASS / FAIL
+Remote-write receiver: PASS / FAIL
+Alloy-fed metric proof: PASS / FAIL
 Grafana datasource: PASS / FAIL
 Date:
 Operator:
