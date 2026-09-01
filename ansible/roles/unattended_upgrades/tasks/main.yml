@@ -1,0 +1,63 @@
+---
+- name: Require Debian-family host
+  ansible.builtin.assert:
+    that:
+      - ansible_os_family == 'Debian'
+    fail_msg: This role supports Debian-family hosts only.
+
+- name: Install unattended-upgrades packages
+  ansible.builtin.apt:
+    name:
+      - unattended-upgrades
+      - apt-listchanges
+    state: present
+    update_cache: true
+
+- name: Enable periodic package-list refresh and unattended upgrades
+  ansible.builtin.copy:
+    dest: /etc/apt/apt.conf.d/20auto-upgrades
+    owner: root
+    group: root
+    mode: '0644'
+    content: |
+      APT::Periodic::Update-Package-Lists "1";
+      APT::Periodic::Unattended-Upgrade "1";
+  when: unattended_upgrades_enabled
+
+- name: Install homelab unattended-upgrades policy
+  ansible.builtin.template:
+    src: 99-homelab-unattended-upgrades.j2
+    dest: "{{ unattended_upgrades_policy_file }}"
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Enable unattended-upgrades service
+  ansible.builtin.systemd:
+    name: unattended-upgrades.service
+    enabled: true
+    state: started
+  when: unattended_upgrades_enabled
+
+- name: Read effective APT configuration
+  ansible.builtin.command:
+    argv:
+      - apt-config
+      - dump
+  register: unattended_upgrades_apt_config
+  changed_when: false
+  check_mode: false
+
+- name: Verify automatic reboot is disabled
+  ansible.builtin.assert:
+    that:
+      - >-
+        'Unattended-Upgrade::Automatic-Reboot "false";'
+        in unattended_upgrades_apt_config.stdout
+      - >-
+        'Unattended-Upgrade::Automatic-Reboot-WithUsers "false";'
+        in unattended_upgrades_apt_config.stdout
+    fail_msg: Automatic unattended reboot is not safely disabled.
+  when:
+    - not unattended_upgrades_automatic_reboot
+    - not unattended_upgrades_automatic_reboot_with_users

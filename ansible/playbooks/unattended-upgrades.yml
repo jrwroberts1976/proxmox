@@ -1,0 +1,8 @@
+---
+- name: Configure unattended upgrades
+  hosts: unattended_upgrades
+  become: true
+  gather_facts: true
+
+  roles:
+    - unattended_upgrades

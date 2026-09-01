@@ -1,0 +1,7 @@
+// Managed by Ansible.
+//
+// Security/OS updates may be installed automatically.
+// Reboots must always be explicitly controlled by the operator.
+
+Unattended-Upgrade::Automatic-Reboot "{{ unattended_upgrades_automatic_reboot | ternary('true', 'false') }}";
+Unattended-Upgrade::Automatic-Reboot-WithUsers "{{ unattended_upgrades_automatic_reboot_with_users | ternary('true', 'false') }}";
