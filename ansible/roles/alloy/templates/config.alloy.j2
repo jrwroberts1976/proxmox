@@ -1,0 +1,70 @@
+// Managed by Ansible. Do not edit manually.
+
+{% if alloy_linux_metrics_enabled | bool %}
+prometheus.exporter.unix "linux" {
+}
+
+discovery.relabel "linux" {
+  targets = prometheus.exporter.unix.linux.targets
+
+  // Canonical host identity used by new queries and alerts.
+  rule {
+    target_label = "hostname"
+    replacement  = "{{ alloy_hostname }}"
+  }
+
+  // Compatibility identity used by the established Linux OS dashboard.
+  rule {
+    target_label = "host"
+    replacement  = "{{ alloy_linux_metrics_host_label }}"
+  }
+
+  // Normalize the Alloy scrape job to the existing Linux dashboard/job model.
+  rule {
+    target_label = "job"
+    replacement  = "{{ alloy_linux_metrics_job }}"
+  }
+
+  rule {
+    target_label = "role"
+    replacement  = "{{ alloy_host_role }}"
+  }
+
+  rule {
+    target_label = "environment"
+    replacement  = "{{ alloy_environment }}"
+  }
+}
+
+prometheus.scrape "linux" {
+  scrape_interval = "15s"
+  targets         = discovery.relabel.linux.output
+  forward_to      = [prometheus.remote_write.homelab.receiver]
+}
+
+prometheus.remote_write "homelab" {
+  endpoint {
+    url = "{{ alloy_prometheus_remote_write_url }}"
+  }
+}
+{% endif %}
+
+{% if alloy_journal_logs_enabled | bool %}
+loki.source.journal "system" {
+  forward_to = [loki.write.homelab.receiver]
+
+  labels = {
+    hostname    = "{{ alloy_hostname }}",
+    role        = "{{ alloy_host_role }}",
+    environment = "{{ alloy_environment }}",
+    source      = "journal",
+    job         = "systemd-journal",
+  }
+}
+
+loki.write "homelab" {
+  endpoint {
+    url = "{{ alloy_loki_write_url }}"
+  }
+}
+{% endif %}

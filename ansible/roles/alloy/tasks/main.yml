@@ -1,0 +1,186 @@
+---
+- name: Verify Alloy role platform
+  ansible.builtin.assert:
+    that:
+      - ansible_os_family == 'Debian'
+    fail_msg: "The Alloy role currently supports Debian-family guests only."
+
+- name: Verify observability destinations are configured
+  ansible.builtin.assert:
+    that:
+      - alloy_prometheus_remote_write_url is match('^https?://')
+      - alloy_loki_write_url is match('^https?://')
+      - "'<' not in alloy_prometheus_remote_write_url"
+      - "'<' not in alloy_loki_write_url"
+    fail_msg: "Set real Prometheus and Loki destination URLs before running the Alloy role."
+
+- name: Confirm Prometheus is reachable before installation
+  ansible.builtin.uri:
+    url: "{{ alloy_prometheus_remote_write_url | regex_replace('/api/v1/write$', '/-/ready') }}"
+    method: GET
+    return_content: true
+    status_code: 200
+    timeout: 5
+  changed_when: false
+  when: alloy_linux_metrics_enabled | bool
+
+- name: Confirm Loki is reachable before installation
+  ansible.builtin.uri:
+    url: "{{ alloy_loki_write_url | regex_replace('/loki/api/v1/push$', '/ready') }}"
+    method: GET
+    return_content: true
+    status_code: 200
+    timeout: 5
+  changed_when: false
+  when: alloy_journal_logs_enabled | bool
+
+- name: Gather installed package facts
+  ansible.builtin.package_facts:
+    manager: auto
+
+- name: Install Grafana repository prerequisites
+  ansible.builtin.apt:
+    name:
+      - ca-certificates
+      - gpg
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Ensure APT keyring directory exists
+  ansible.builtin.file:
+    path: /etc/apt/keyrings
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install Grafana repository signing key
+  ansible.builtin.get_url:
+    url: "{{ alloy_grafana_key_url }}"
+    dest: "{{ alloy_grafana_key_path }}"
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Configure Grafana stable APT repository
+  ansible.builtin.copy:
+    dest: "{{ alloy_grafana_repo_file }}"
+    content: "deb [signed-by={{ alloy_grafana_key_path }}] {{ alloy_grafana_repo_url }} stable main\n"
+    owner: root
+    group: root
+    mode: "0644"
+  register: alloy_repository
+
+# During a first-install dry run the repository/key changes above are only
+# simulated. APT therefore cannot yet see the Alloy package and attempting the
+# package task would incorrectly fail with "No package matching 'alloy'".
+# Report the intended package action and stop before package-dependent tasks.
+- name: Report first-install dry-run package action
+  ansible.builtin.debug:
+    msg: "CHECK MODE: Grafana Alloy would be installed after the Grafana APT repository is applied."
+  when:
+    - ansible_check_mode
+    - "'alloy' not in ansible_facts.packages"
+
+- name: End first-install dry run before Alloy package installation
+  ansible.builtin.meta: end_host
+  when:
+    - ansible_check_mode
+    - "'alloy' not in ansible_facts.packages"
+
+- name: Install Grafana Alloy
+  ansible.builtin.apt:
+    name: "{{ alloy_package_name }}"
+    state: present
+    update_cache: true
+
+- name: Add Alloy service account to journal-readable groups
+  ansible.builtin.user:
+    name: alloy
+    groups: "{{ alloy_journal_groups | join(',') }}"
+    append: true
+  when: alloy_journal_logs_enabled | bool
+  notify: Restart Alloy
+
+- name: Set Alloy configuration directory permissions
+  ansible.builtin.file:
+    path: /etc/alloy
+    state: directory
+    owner: root
+    group: alloy
+    mode: "0750"
+
+- name: Set Alloy storage directory permissions
+  ansible.builtin.file:
+    path: "{{ alloy_storage_path }}"
+    state: directory
+    owner: alloy
+    group: alloy
+    mode: "0750"
+
+- name: Render Alloy systemd environment
+  ansible.builtin.template:
+    src: alloy.default.j2
+    dest: "{{ alloy_environment_file }}"
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart Alloy
+
+- name: Render Alloy observability configuration
+  ansible.builtin.template:
+    src: config.alloy.j2
+    dest: "{{ alloy_config_path }}"
+    owner: root
+    group: alloy
+    mode: "0640"
+  notify: Restart Alloy
+
+- name: Validate Alloy configuration before restart
+  ansible.builtin.command:
+    cmd: "alloy validate {{ alloy_config_path }}"
+  changed_when: false
+
+- name: Ensure Alloy is enabled and started
+  ansible.builtin.service:
+    name: alloy
+    state: started
+    enabled: true
+
+- name: Apply pending Alloy restart after validated changes
+  ansible.builtin.meta: flush_handlers
+
+- name: Confirm Alloy service is active
+  ansible.builtin.command:
+    cmd: systemctl is-active alloy
+  register: alloy_service_active
+  changed_when: false
+  failed_when: alloy_service_active.stdout.strip() != 'active'
+
+- name: Confirm Alloy readiness endpoint
+  ansible.builtin.uri:
+    url: "http://{{ alloy_http_listen_address }}/-/ready"
+    method: GET
+    status_code: 200
+    timeout: 5
+  changed_when: false
+
+- name: Confirm Alloy health endpoint
+  ansible.builtin.uri:
+    url: "http://{{ alloy_http_listen_address }}/-/healthy"
+    method: GET
+    status_code: 200
+    timeout: 5
+  changed_when: false
+
+# Do not use Ansible become_user here. Becoming from root to another
+# unprivileged account requires Ansible to make its remote temporary module
+# files readable by that account and can depend on host ACL tooling. runuser
+# executes the validation as the Alloy service account without that unrelated
+# temporary-file permission dependency.
+- name: Confirm Alloy can read the systemd journal
+  ansible.builtin.command:
+    cmd: runuser -u alloy -- journalctl -n 1 --no-pager
+  changed_when: false
+  when: alloy_journal_logs_enabled | bool

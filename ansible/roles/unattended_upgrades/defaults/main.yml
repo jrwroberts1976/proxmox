@@ -1,0 +1,6 @@
+---
+unattended_upgrades_enabled: true
+unattended_upgrades_automatic_reboot: false
+unattended_upgrades_automatic_reboot_with_users: false
+
+unattended_upgrades_policy_file: /etc/apt/apt.conf.d/99-homelab-unattended-upgrades

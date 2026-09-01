@@ -4,71 +4,90 @@
 
 This runbook defines the controlled procedure for deploying a new Debian Linux VM on the Proxmox platform using Infrastructure as Code.
 
-The VM must be created through OpenTofu/Terraform, bootstrapped with cloud-init, and handed over to Ansible for operating-system and service configuration. Manual VM creation in the Proxmox GUI is not the normal deployment path.
-
-This is the first runbook in the application-platform build sequence:
+The normal deployment chain is:
 
 ```text
-1. Linux VM IaC deployment
+1. OpenTofu VM creation
         |
-2. PostgreSQL
+2. cloud-init / guest acceptance
         |
-3. TimescaleDB
+3. Linux security hardening
         |
-4. Nginx
+4. Alloy observability acceptance
+        |
+5. PostgreSQL
+        |
+6. TimescaleDB
+        |
+7. Nginx
 ```
+
+Manual VM creation or persistent GUI-only corrections are not the normal path. Git/OpenTofu/Ansible are the source of truth.
+
+Security and observability are mandatory build gates, not optional follow-up work.
 
 ---
 
 ## 2. Current platform baseline
 
-Target hypervisor:
+Verified current Proxmox platform:
 
 ```text
-Proxmox host: PROXMOX
-Management IP: 192.168.2.70
-Bridge: vmbr0
-Preferred guest storage: vm-ssd
-Storage type: LVM-thin
-Backing disk: KINGSTON SA400S37480G
+Proxmox host:      PROXMOX
+Management IP:     192.168.2.70
+Bridge:            vmbr0
+Preferred storage: vm-ssd
+Storage type:      LVM-thin
+Backing disk:      KINGSTON SA400S37480G
 ```
 
-Initial disposable/test VM sizing for the current 8 GB host:
+Current Debian template:
 
 ```text
-vCPU:        2
-RAM:         4096 MB
-Disk:        64 GB
-Storage:     vm-ssd
-OS:          Debian 13
-Firmware:    UEFI or the established template default
-NIC:         VirtIO
-Disk bus:    SCSI/VirtIO SCSI
-Guest agent: enabled
+VMID: 9000
+Name: debian-13-cloud-template
+OS: Debian 13 genericcloud
 ```
 
-This sizing is for build and validation. Revisit RAM before treating PostgreSQL/TimescaleDB as a permanent production workload.
+Current application-platform VM:
+
+```text
+VMID:       101
+Hostname:   app-platform-01
+IP:         192.168.2.253
+MAC:        BC:24:11:08:A2:33
+vCPU:       2
+RAM:        4096 MB
+Disk:       64 GB
+Storage:    vm-ssd
+NIC:        VirtIO
+Guest agent: enabled/healthy
+```
+
+VM101 currently uses DHCP. Reserve the address by MAC before treating it as a long-lived application/database endpoint rather than silently adding an unmanaged static address.
 
 ---
 
 ## 3. Design rules
 
 1. Git is the source of truth.
-2. Use OpenTofu/Terraform for VM lifecycle.
-3. Use cloud-init only for first-boot bootstrap and access.
-4. Use Ansible for ongoing OS and application configuration.
-5. Store VM disks on `vm-ssd` unless a documented exception exists.
-6. Do not commit Proxmox API tokens, SSH private keys, passwords, Terraform/OpenTofu state secrets, or Ansible Vault passwords.
-7. Plan must be reviewed before apply.
-8. The first deployment must be disposable.
-9. Observability must be commissioned before the VM is accepted for production use.
-10. Destruction must only be performed against a VM explicitly confirmed as disposable.
+2. Use OpenTofu for VM lifecycle.
+3. Use cloud-init for first-boot identity/access only.
+4. Use Ansible for OS, security, observability and applications.
+5. Store guest disks on `vm-ssd` unless a documented exception exists.
+6. Never commit API tokens, private keys, passwords, state secrets or Vault passwords.
+7. Review a saved plan before apply.
+8. Do not make corrective persistent GUI changes after an IaC failure; fix code and re-plan.
+9. Security hardening must pass before observability/applications.
+10. Observability must fully pass before PostgreSQL/TimescaleDB/Nginx.
+11. A second Ansible run should prove idempotence for each managed layer.
+12. Destroy operations require explicit confirmation that the VM is disposable and contains no required data.
 
 ---
 
 ## 4. Required values
 
-Record these before creating code:
+Record before creation:
 
 ```text
 VM_NAME=
@@ -82,18 +101,16 @@ VM_MEMORY_MB=4096
 VM_DISK_GB=64
 VM_STORAGE=vm-ssd
 VM_BRIDGE=vmbr0
-TEMPLATE_VM_ID=
-PROXMOX_NODE=
+TEMPLATE_VM_ID=9000
+PROXMOX_NODE=PROXMOX
 SSH_PUBLIC_KEY_FILE=
 ```
 
-Do not guess a VM ID or IP address. Confirm both are unused before apply.
+Do not guess a VM ID or address. Confirm both are unused/approved before apply.
 
 ---
 
-# Stage 0 - Pre-flight gates
-
-## 5. Verify Proxmox capacity
+# Stage 0 - Proxmox preflight
 
 On `PROXMOX`:
 
@@ -107,105 +124,52 @@ lsblk
 
 Required:
 
-- `vm-ssd` is `active`;
-- sufficient free RAM exists for the temporary VM;
-- chosen VM ID is unused;
-- no storage error is present.
+- `vm-ssd` active;
+- sufficient RAM/storage;
+- chosen VMID unused;
+- source template present;
+- no storage errors.
 
-Stop if the host is under memory pressure or `vm-ssd` is unavailable.
-
-## 6. Verify the source template
-
-The Debian cloud-init template must already exist and be known-good.
+Template check:
 
 ```bash
-qm list
-qm config <TEMPLATE_VM_ID>
+qm config 9000
 ```
 
-Expected template properties:
-
-- Debian 13;
-- cloud-init capable;
-- QEMU guest agent installed/enabled where practical;
-- no embedded passwords or private credentials;
-- boot succeeds on `vmbr0`.
-
-If the template is not proven, create and validate the template as a separate controlled task before continuing.
+Future template builds should include `qemu-guest-agent` before conversion so new guests do not require a post-clone correction.
 
 ---
 
-# Stage 1 - Repository structure
+# Stage 1 - OpenTofu source
 
-## 7. IaC layout
-
-Use the repository structure:
+Current repository branch for VM101 work:
 
 ```text
-tofu/
-├── providers.tf
-├── variables.tf
-├── outputs.tf
-├── modules/
-│   └── linux-vm/
-└── environments/
-    └── homelab/
-        ├── main.tf
-        ├── variables.tf
-        └── terraform.tfvars.example
+iac/app-platform-vm101
 ```
 
-Real secret-bearing `.tfvars` files and local state must not be committed.
+Use the repository's existing OpenTofu structure and `bpg/proxmox` provider implementation. Credentials must come from the approved environment/secret mechanism, not `.tf` source.
 
-## 8. Provider model
-
-Use a maintained Proxmox provider compatible with both OpenTofu and the installed Proxmox VE release. The intended provider is `bpg/proxmox` unless validation identifies a reason to change.
-
-Pin the provider version after it has been tested against the homelab. Do not use an unconstrained provider version in production.
-
-Provider credentials must come from an approved environment/secret mechanism, not source files.
-
----
-
-# Stage 2 - VM definition
-
-## 9. Required VM properties
-
-The reusable module must declare, rather than manually configure:
+Required declared properties include:
 
 ```text
 name
 vm_id
 node_name
 clone/template source
-cpu cores
+cpu
 memory
-boot disk
-storage datastore
-network bridge
-IPv4 configuration
-DNS servers
+disk/storage
+bridge
+cloud-init network
+DNS
 cloud-init user
-SSH public keys
+SSH public key
 QEMU guest agent
 startup state
 ```
 
-For the first platform VM use:
-
-```text
-storage = vm-ssd
-bridge  = vmbr0
-cores   = 2
-memory  = 4096 MB
-disk    = 64 GB
-```
-
-Do not place passwords in cloud-init metadata when SSH-key authentication can be used.
-
-## 10. Outputs
-
-At minimum expose:
+Expose at least:
 
 ```text
 vm_id
@@ -213,61 +177,43 @@ vm_name
 ipv4_address
 ```
 
-These values become the hand-off into the Ansible inventory.
+for Ansible hand-off.
 
 ---
 
-# Stage 3 - Validate and plan
+# Stage 2 - Validate and plan
 
-## 11. Initialise
-
-From the IaC directory:
+From the environment directory:
 
 ```bash
-cd tofu/environments/homelab
-
 tofu fmt -recursive
 tofu init
 tofu validate
-```
-
-All commands must complete successfully.
-
-## 12. Review plan
-
-```bash
 tofu plan -out=tfplan
 ```
 
-Review the plan for:
+Review:
 
 - exactly the intended VM;
-- correct VM ID;
-- correct source template;
+- correct template/VMID;
 - `vm-ssd` storage;
 - `vmbr0` network;
-- intended IP/gateway/DNS;
-- 2 vCPU / 4096 MB RAM / 64 GB disk for the initial build;
-- no unrelated resources scheduled for deletion or replacement;
-- no secrets displayed unexpectedly.
+- intended CPU/RAM/disk;
+- intended network/bootstrap values;
+- no unrelated destroy/replace;
+- no secret leakage.
 
-If the plan contains an unplanned destroy or replacement, stop.
+Stop if an unplanned destroy/replacement appears.
 
 ---
 
-# Stage 4 - Apply
-
-## 13. Create the VM
+# Stage 3 - Apply
 
 ```bash
 tofu apply tfplan
 ```
 
-Do not make corrective GUI changes if apply fails. Diagnose and correct the IaC source, then generate a new plan.
-
-## 14. Verify from Proxmox
-
-On `PROXMOX`:
+On Proxmox:
 
 ```bash
 qm list
@@ -276,15 +222,13 @@ qm config <VM_ID>
 pvesm status
 ```
 
-Confirm the VM disk is backed by `vm-ssd`.
+Confirm the disk is on `vm-ssd` and the VM is running as intended.
 
 ---
 
-# Stage 5 - Guest acceptance
+# Stage 4 - Guest acceptance
 
-## 15. Network and identity
-
-From an administration host:
+From the administration host:
 
 ```bash
 ping -c 3 <VM_IP>
@@ -306,17 +250,15 @@ cloud-init status --long
 
 Required:
 
-- Debian 13 identity is correct;
-- intended hostname and IP are present;
-- default route points to `192.168.2.1`;
-- DNS resolution works;
-- cloud-init reports completion;
-- no unexpected failed services exist;
-- SSH key authentication works.
+- Debian 13 identity correct;
+- expected hostname/network;
+- default route correct;
+- DNS works;
+- cloud-init complete;
+- no unexpected failed services;
+- SSH key access works.
 
-## 16. Guest agent
-
-If QEMU guest agent is part of the template:
+Guest agent:
 
 ```bash
 systemctl status qemu-guest-agent --no-pager
@@ -330,44 +272,51 @@ qm agent <VM_ID> ping
 
 ---
 
-# Stage 6 - Ansible hand-off
+# Stage 5 - Ansible hand-off
 
-## 17. Add inventory only after IaC acceptance
+Do not add a guest to application groups until Stage 4 passes.
 
-Add the host to the appropriate inventory groups only after the VM passes Stage 5.
+The VM then enters the managed Ansible layers:
 
-Example:
-
-```yaml
-all:
-  children:
-    postgresql_servers:
-      hosts:
-        db-01:
-          ansible_host: <VM_IP>
-    timescaledb_servers:
-      hosts:
-        db-01:
-    nginx_servers:
-      hosts:
-        db-01:
+```text
+security hardening
+Alloy observability
+PostgreSQL
+TimescaleDB
+Nginx
 ```
 
-Validate:
+Validate controller connectivity before every new layer:
 
 ```bash
-cd ansible
-ansible-inventory --graph
-ansible all -m ping --limit <VM_NAME>
+ansible <GROUP> -m ansible.builtin.ping --limit <VM_NAME>
 ```
 
-The next runbook is `runbooks/postgresql-install.md`.
+Do not disable SSH host-key checking to bypass an identity problem.
+
+---
+
+# Stage 6 - Security gate
+
+Use:
+
+```text
+runbooks/linux-vm-security-hardening.md
+```
+
+Current validated controls include:
+
+- removing OpenSSH UMAC-64 MAC algorithms;
+- persistently blocking IPv4 ICMP timestamp requests;
+- fresh SSH validation;
+- idempotence;
+- external scan verification.
+
+Do not proceed directly to PostgreSQL when security passes. The next mandatory stage is observability.
 
 ---
 
 # Stage 7 - Observability gate
-
-## 18. Commission monitoring before production acceptance
 
 Use:
 
@@ -375,75 +324,140 @@ Use:
 runbooks/linux-vm-observability-bootstrap.md
 ```
 
-The VM is not production-ready until:
+Current new-VM standard:
 
-- Linux metrics are visible centrally;
-- logs are visible centrally;
-- host-down monitoring is active;
-- disk and memory usage can be observed.
+```text
+Grafana Alloy native service
+ -> Linux node metrics
+ -> ids-01 Prometheus 192.168.2.242:9090
+ -> systemd journal
+ -> ids-01 Loki 192.168.2.242:3100
+ -> Grafana on ids-01
+```
+
+The authoritative Ansible implementation is:
+
+```text
+ansible/roles/alloy/
+ansible/playbooks/alloy.yml
+```
+
+Observability is complete only after:
+
+- Alloy syntax/preflight passes;
+- deployment succeeds;
+- second run is idempotent;
+- readiness/health pass;
+- journal access as unprivileged `alloy` passes;
+- `node_uname_info` and core metrics are visible centrally;
+- unique journal marker is visible in Loki;
+- duplicate metrics path check passes;
+- Grafana source queries work;
+- required alerts are validated;
+- reboot persistence passes.
+
+Do **not** treat "monitoring scheduled" as sufficient. This gate must be complete before database/web application commissioning.
 
 ---
 
-# Stage 8 - Idempotence and drift
+# Stage 8 - Application sequence
 
-## 19. Re-plan
+Only after security and observability gates close:
 
-After successful creation:
+```text
+runbooks/postgresql-install.md
+runbooks/timescaledb-install.md
+runbooks/nginx-install.md
+```
+
+Each application runbook must re-check that the accepted Alloy/host telemetry has not regressed after package/service changes.
+
+---
+
+# Stage 9 - Drift/idempotence
+
+After successful VM creation and baseline commissioning:
 
 ```bash
 tofu plan
 ```
 
-Expected result: no unintended changes.
+Expected: no unintended VM drift.
 
-Do not make persistent VM configuration changes in the Proxmox GUI. If a change is required, update Git and re-apply.
+Ansible-managed layers should also be rerun for idempotence before closure.
+
+Persistent GUI changes create drift and must be brought back into code.
 
 ---
 
-# Stage 9 - Rollback
+# Stage 10 - Rollback/destroy
 
-## 20. Disposable VM rollback
-
-Only if the VM is explicitly disposable and contains no required data:
+Only for an explicitly disposable VM with no required data:
 
 ```bash
 tofu plan -destroy
-```
-
-Review the destruction plan carefully, then:
-
-```bash
 tofu destroy
 ```
 
-After destruction:
+Then:
 
 ```bash
 qm list
 pvesm status
 ```
 
-Confirm no orphaned disk remains for the destroyed test VM.
+Confirm no orphaned disk remains.
 
-Never destroy a database VM with retained data without first proving the backup/recovery path.
+Never destroy a database VM with retained data without a proven backup/restore path.
 
 ---
 
-## 21. Acceptance criteria
+## Acceptance checklist
 
-The Linux VM deployment is complete when:
+The Linux VM platform build is ready for application installation only when:
 
-- [ ] VM exists only because it is declared in IaC.
-- [ ] OpenTofu validate passes.
-- [ ] Apply contains no unrelated changes.
-- [ ] VM uses `vm-ssd`.
-- [ ] Network identity is correct.
+- [ ] VM is declared in OpenTofu.
+- [ ] OpenTofu validation/plan passes.
+- [ ] VM uses intended storage/network.
+- [ ] cloud-init completes.
 - [ ] SSH key access works.
-- [ ] cloud-init completed successfully.
-- [ ] QEMU guest agent works where enabled.
-- [ ] `systemctl --failed` is clean or exceptions are documented.
-- [ ] A post-apply OpenTofu plan is clean.
-- [ ] Ansible can reach the VM.
-- [ ] Monitoring/logging commissioning is scheduled or complete.
+- [ ] guest agent works where enabled.
+- [ ] no unexpected failed units exist.
+- [ ] security-hardening playbook passes.
+- [ ] fresh SSH works after hardening.
+- [ ] hardening idempotence passes.
+- [ ] Alloy deployment passes.
+- [ ] Alloy idempotence passes.
+- [ ] metrics E2E passes.
+- [ ] logs E2E passes.
+- [ ] duplicate metrics check passes.
+- [ ] Grafana source data passes.
+- [ ] alert coverage passes.
+- [ ] reboot persistence passes.
+- [ ] post-apply OpenTofu plan is clean.
 
-Only then proceed to PostgreSQL installation.
+Only then proceed to PostgreSQL.
+
+---
+
+## VM101 status record
+
+As of 2026-09-01:
+
+```text
+VM101 IaC:                    PASS
+Guest commissioning:         PASS
+Security hardening:           PASS
+Security idempotence:         PASS
+Alloy deployment:             PASS
+Alloy version:                v1.19.2
+Alloy idempotence:            PASS (changed=0)
+Metrics E2E:                  PASS
+Logs E2E:                     PASS
+Duplicate metric path:        PASS
+Grafana source data:          PASS
+Alert coverage:               OUTSTANDING
+Reboot observability proof:   OUTSTANDING
+```
+
+PostgreSQL remains gated until the outstanding observability items are closed.

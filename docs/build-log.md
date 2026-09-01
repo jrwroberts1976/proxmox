@@ -315,3 +315,165 @@ This corresponds to approximately 424.56 GiB of thin-provisioned VM/LXC capacity
 3. Continue host security baseline work.
 4. Select and validate an off-host backup destination before production workload migration.
 5. Continue IaC foundation and disposable VM proof using the new `vm-ssd` tier where appropriate.
+
+---
+
+## 2026-09-01 — Debian 13 template and OpenTofu VM 101
+
+### Debian 13 reusable template
+
+The official Debian 13 trixie generic cloud image was downloaded from `cloud.debian.org` and validated against Debian's published SHA-512 checksum before import.
+
+Template created:
+
+```text
+VMID:       9000
+Name:       debian-13-cloud-template
+Storage:    vm-ssd
+Boot disk:  vm-ssd:base-9000-disk-0
+Cloud-init: vm-ssd:vm-9000-cloudinit
+Bridge:     vmbr0
+Agent:      enabled
+Template:   yes
+State:      stopped
+```
+
+The image import and template conversion completed successfully. Post-conversion validation confirmed `template: 1` and both the boot disk and cloud-init disk on `vm-ssd`.
+
+### OpenTofu API model
+
+The existing `iac@pve` service account and `opentofu` API token were reused. The existing split least-privilege roles were retained:
+
+```text
+HomelabIaCNode
+HomelabIaCStorage
+HomelabIaCVM
+```
+
+The new `vm-ssd` storage ACL was added for `iac@pve` using `HomelabIaCStorage`. The API token secret remains outside Git.
+
+### Legacy VM100 state isolation
+
+The earlier disposable OpenTofu proof VM (`100`, `debian-iac-test-01`) was separated from the new application-platform build.
+
+Its code/state is preserved in:
+
+```text
+/home/james/projects/proxmox-legacy-vm100
+```
+
+The VM101 branch was created cleanly from current `origin/main`:
+
+```text
+iac/app-platform-vm101
+```
+
+Residual VM100 state/provider-cache files in the primary checkout were checksum-verified against the protected copy and removed before creating the VM101 OpenTofu workspace.
+
+### OpenTofu foundation
+
+Execution host:
+
+```text
+TestServer
+OpenTofu v1.12.6
+bpg/proxmox 0.111.1
+```
+
+The new repository files are:
+
+```text
+.gitignore
+tofu/.terraform.lock.hcl
+tofu/main.tf
+tofu/outputs.tf
+tofu/providers.tf
+tofu/variables.tf
+tofu/versions.tf
+```
+
+The provider is pinned to `0.111.1`. Runtime state, plan files, local variables, credentials and private-key material are excluded from Git.
+
+The VM definition was committed before deployment:
+
+```text
+Commit:  a735953142465ab03cb2f98cb3ac9d152fd3ab1d
+Message: Add OpenTofu app platform VM foundation
+Branch:  iac/app-platform-vm101
+```
+
+### Reviewed plan
+
+The saved OpenTofu plan passed validation with exactly one create action:
+
+```text
+Plan: 1 to add, 0 to change, 0 to destroy.
+```
+
+Reviewed specification:
+
+```text
+VMID:              101
+Name:              app-platform-01
+Node:              PROXMOX
+Source template:   9000
+Clone:             full
+Storage:           vm-ssd
+CPU:               2 x x86-64-v2-AES
+RAM:               4096 MB
+Disk:              64 GB scsi0
+Cloud-init:        vm-ssd
+Bridge:            vmbr0
+IPv4:              DHCP
+DNS:               192.168.2.48
+Guest agent:       enabled
+Start after apply: false
+On boot:           false
+```
+
+The exact reviewed saved plan was then applied rather than creating a replacement plan at deployment time.
+
+### VM101 creation result
+
+OpenTofu creation completed successfully.
+
+Final gates:
+
+```text
+vm101_opentofu_apply=PASS
+vm101_stopped_gate=PASS
+vm101_creation=PASS
+```
+
+VM101 was intentionally left stopped for the next commissioning stage.
+
+### Template post-apply validation
+
+Template 9000 remained intact after the clone:
+
+```text
+status: stopped
+name: debian-13-cloud-template
+scsi0: vm-ssd:base-9000-disk-0,aio=io_uring,backup=1,cache=none,discard=on,iothread=1,size=3G,ssd=1
+template: 1
+```
+
+### Documentation
+
+The full reproducible procedure is recorded in:
+
+```text
+docs/debian13-template-vm101-opentofu.md
+```
+
+### Next actions
+
+1. Review the 8 GB Proxmox host memory position before starting the 4 GB guest.
+2. Start VM101 through OpenTofu.
+3. Wait for cloud-init and determine the DHCP address.
+4. Validate Debian 13, SSH-key access, routing, DNS and QEMU guest agent.
+5. Approve/reserve the permanent guest network identity.
+6. Re-plan OpenTofu and require no unintended drift.
+7. Hand VM101 to the Ansible Linux baseline.
+8. Continue the application stack in order: PostgreSQL -> TimescaleDB -> Nginx.
+9. Commission metrics/logging before production acceptance.

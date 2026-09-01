@@ -1,0 +1,31 @@
+---
+alloy_package_name: alloy
+alloy_grafana_repo_url: https://apt.grafana.com
+alloy_grafana_key_url: https://apt.grafana.com/gpg-full.key
+alloy_grafana_key_path: /etc/apt/keyrings/grafana.asc
+alloy_grafana_repo_file: /etc/apt/sources.list.d/grafana.list
+
+alloy_config_path: /etc/alloy/config.alloy
+alloy_environment_file: /etc/default/alloy
+alloy_storage_path: /var/lib/alloy
+alloy_http_listen_address: 127.0.0.1:12345
+
+alloy_prometheus_remote_write_url: http://192.168.2.242:9090/api/v1/write
+alloy_loki_write_url: http://192.168.2.242:3100/loki/api/v1/push
+
+alloy_host_role: application
+alloy_environment: homelab
+alloy_hostname: "{{ inventory_hostname }}"
+
+# Keep Alloy node metrics compatible with the established Linux OS Grafana
+# dashboard and existing direct-scrape Linux hosts. The dashboard selects
+# job="linux-hosts" and the `host` label. We retain `hostname` as the stable
+# canonical identity as well, so new queries and alerts can use either label.
+alloy_linux_metrics_job: linux-hosts
+alloy_linux_metrics_host_label: "{{ alloy_hostname }}"
+
+alloy_linux_metrics_enabled: true
+alloy_journal_logs_enabled: true
+alloy_journal_groups:
+  - adm
+  - systemd-journal

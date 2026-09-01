@@ -2,7 +2,7 @@
 
 This repository tracks the build, configuration, migration, and operational runbooks for the Proxmox homelab platform.
 
-**Project status:** host bootstrap is complete and hardware/storage preparation is active. No production workloads have been migrated. New infrastructure will be built Infrastructure-as-Code first.
+**Project status:** host bootstrap and dedicated VM storage preparation are complete. The OpenTofu IaC foundation is now proven: Debian 13 template VM `9000` exists on `vm-ssd`, the earlier disposable VM proof is preserved separately, and application-platform VM `101` has been created from a reviewed saved OpenTofu plan and intentionally left stopped for guest commissioning. No production workloads have been migrated.
 
 ## Hardware
 
@@ -41,6 +41,8 @@ This repository tracks the build, configuration, migration, and operational runb
 | Repository | `pve-no-subscription` enabled |
 | Enterprise repositories | PVE and Ceph Enterprise disabled |
 | node_exporter | 1.9.0-1+b4 on port 9100 |
+| OpenTofu | 1.12.6 on `TestServer` |
+| Proxmox provider | `bpg/proxmox` 0.111.1 pinned |
 | Headless operation | Reboot and remote-management test passed |
 
 ## Build status
@@ -66,14 +68,32 @@ This repository tracks the build, configuration, migration, and operational runb
 - [x] Wipe legacy NTFS filesystem from Kingston SSD
 - [x] Provision Kingston SSD as dedicated Proxmox VM/LXC storage (`vm-ssd`)
 - [x] Linux VM/PostgreSQL/TimescaleDB/Nginx deployment runbooks prepared
+- [x] OpenTofu IaC foundation established and provider pinned
+- [x] Least-privilege `iac@pve` API model validated for node, VM, bridge and `vm-ssd`
+- [x] Disposable Debian IaC VM proof preserved as isolated VM `100` state/worktree
+- [x] Debian 13 genericcloud source downloaded and SHA-512 verified
+- [x] Reusable Debian 13 cloud-init template VM `9000` created on `vm-ssd`
+- [x] Application-platform VM `101` created through reviewed saved OpenTofu plan
+- [x] VM `101` left stopped after creation and template `9000` revalidated intact
+- [ ] Start and commission VM `101`
+- [ ] Reserve/approve final VM `101` network identity
+- [ ] Hand VM `101` to Ansible Linux baseline
+- [ ] Apply validated Linux security hardening to VM `101` and revalidate SSH/ICMP controls
+- [ ] Re-run matching Greenbone checks after VM `101` hardening
 - [ ] Review/update HP BIOS firmware
 - [ ] Add Proxmox target to central Prometheus/Grafana
 - [ ] Host security baseline
 - [ ] Backup destination and restore test
-- [ ] IaC foundation
-- [ ] Disposable IaC Debian VM proof
 - [ ] Jenkins IaC integration
 - [ ] Production workload migration
+
+## Current IaC objects
+
+| VMID | Name | Role | Storage | State |
+|---:|---|---|---|---|
+| 100 | `debian-iac-test-01` | Earlier disposable OpenTofu proof | `local-lvm` | Managed by isolated legacy state/worktree |
+| 9000 | `debian-13-cloud-template` | Debian 13 reusable cloud-init template | `vm-ssd` | Template, stopped |
+| 101 | `app-platform-01` | First application-platform VM | `vm-ssd` | Created by OpenTofu, intentionally stopped |
 
 ## Storage design
 
@@ -105,10 +125,19 @@ Planned workloads include a Debian Docker VM, Home Assistant OS VM, and future t
 
 ## Initial application-platform build sequence
 
-The first IaC application-platform proof follows these runbooks in order:
+The first IaC application-platform proof follows these controlled gates in order:
 
 ```text
 Linux VM IaC deployment
+        |
+        v
+Guest commissioning / cloud-init acceptance
+        |
+        v
+Linux security hardening
+        |
+        v
+Observability / baseline acceptance
         |
         v
 PostgreSQL
@@ -120,6 +149,8 @@ TimescaleDB
 Nginx
 ```
 
+Security hardening is a required build gate, not an optional post-install activity. The validated Ansible role removes the two weak UMAC-64 SSH MAC algorithms and blocks IPv4 ICMP timestamp requests while preserving normal SSH and ping. PostgreSQL must not be installed until the hardening and security-validation gates pass.
+
 Each component has its own validation, idempotence, acceptance and rollback gates. The first deployment remains disposable until backup/recovery and observability gates are passed.
 
 ## Documentation
@@ -127,7 +158,9 @@ Each component has its own validation, idempotence, acceptance and rollback gate
 - [`docs/project-plan.md`](docs/project-plan.md) — full project plan, IaC model, Jenkins integration, migration gates, DNS resilience, backup/DR and acceptance criteria.
 - [`docs/installation.md`](docs/installation.md) — physical host installation, repository setup, networking, validation commands, SMART/thermal/virtualisation baselines and post-install gates.
 - [`docs/build-log.md`](docs/build-log.md) — chronological implementation record of changes performed on the live host.
+- [`docs/debian13-template-vm101-opentofu.md`](docs/debian13-template-vm101-opentofu.md) — exact Debian 13 template `9000` and OpenTofu VM `101` build, API permissions, state separation, saved-plan review/apply and validation procedure.
 - [`runbooks/linux-vm-iac-deployment.md`](runbooks/linux-vm-iac-deployment.md) — deploy a Debian 13 Proxmox VM through OpenTofu/Terraform, cloud-init and the `vm-ssd` storage tier, then hand it to Ansible.
+- [`runbooks/linux-vm-security-hardening.md`](runbooks/linux-vm-security-hardening.md) — mandatory VM build security gate using the validated Ansible SSH UMAC-64 and ICMP timestamp controls, including validation, idempotence, Greenbone closure and rollback.
 - [`runbooks/postgresql-install.md`](runbooks/postgresql-install.md) — deploy and validate the repository PostgreSQL Ansible role, database/users, access controls, idempotence and rollback gates.
 - [`runbooks/timescaledb-install.md`](runbooks/timescaledb-install.md) — deploy TimescaleDB on PostgreSQL, validate preload/extension/hypertables, and control tuning/upgrades.
 - [`runbooks/nginx-install.md`](runbooks/nginx-install.md) — deploy Nginx sites/reverse proxies through Ansible with configuration testing, exposure/security and rollback gates.
@@ -137,4 +170,4 @@ Each component has its own validation, idempotence, acceptance and rollback gate
 - [`runbooks/prometheus-install.md`](runbooks/prometheus-install.md) — deploy the central Prometheus service, persistent TSDB, remote-write receiver, validation and Grafana integration.
 - [`runbooks/loki-install.md`](runbooks/loki-install.md) — deploy the central Loki log store, persistent storage, Alloy ingestion path and Grafana integration.
 - [`runbooks/linux-vm-observability-bootstrap.md`](runbooks/linux-vm-observability-bootstrap.md) — standard metrics + logs commissioning procedure for every new Linux VM.
-- [`ansible/linux-security-hardening/README.md`](ansible/linux-security-hardening/README.md) — validated Ansible runbook for OpenSSH UMAC-64 removal and persistent ICMP timestamp-request blocking on Debian/Proxmox hosts.
+- [`ansible/linux-security-hardening/README.md`](ansible/linux-security-hardening/README.md) — validated Ansible implementation for OpenSSH UMAC-64 removal and persistent ICMP timestamp-request blocking on Debian/Proxmox hosts.
