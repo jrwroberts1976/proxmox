@@ -13,17 +13,31 @@ ansible/roles/postgresql/
 
 The current repository baseline targets PostgreSQL 17 on Debian 13.
 
-This is runbook 2 in the platform sequence:
+The required platform sequence is:
 
 ```text
-Linux VM IaC -> PostgreSQL -> TimescaleDB -> Nginx
+Linux VM IaC
+  -> guest acceptance
+  -> Linux security hardening
+  -> Alloy observability acceptance
+  -> PostgreSQL
+  -> TimescaleDB
+  -> Nginx
 ```
+
+PostgreSQL must not be used as a shortcut around an incomplete VM baseline. Security and observability are mandatory gates before database installation.
 
 ---
 
 ## 2. Preconditions
 
-The Linux VM deployment runbook must already have passed.
+The following runbooks must already have passed for the target VM:
+
+```text
+runbooks/linux-vm-iac-deployment.md
+runbooks/linux-vm-security-hardening.md
+runbooks/linux-vm-observability-bootstrap.md
+```
 
 Required:
 
@@ -31,18 +45,39 @@ Required:
 - VM is reachable by Ansible;
 - intended hostname/IP are correct;
 - time synchronisation is healthy;
-- adequate free disk exists on the guest;
 - no unexpected failed services exist;
+- Linux security-hardening gate is closed;
+- Alloy is enabled, active, ready and healthy;
+- Linux `node_*` metrics are visible in authoritative Prometheus on `ids-01`;
+- journal logs are visible in authoritative Loki on `ids-01`;
+- duplicate host-metrics path check has passed;
+- adequate free disk exists on the guest;
 - secrets are stored outside plaintext Git.
 
-Verify:
+For VM101, the observability baseline has already proved:
+
+```text
+Prometheus: 192.168.2.242:9090
+Loki:       192.168.2.242:3100
+Alloy:      v1.19.2
+hostname:   app-platform-01
+role:       application
+environment: homelab
+```
+
+Before PostgreSQL installation, the remaining observability acceptance items such as required alert coverage and reboot persistence must also be closed.
+
+Verify the target VM before proceeding:
 
 ```bash
 cd ansible
 ansible all -m ping --limit <DB_HOST>
 ansible <DB_HOST> -m setup -a 'filter=ansible_distribution*'
 ansible <DB_HOST> -m shell -a 'free -h && df -h && systemctl --failed'
+ansible <DB_HOST> -b -m shell -a 'systemctl is-active alloy && curl -fsS http://127.0.0.1:12345/-/healthy'
 ```
+
+Stop if the baseline has regressed.
 
 ---
 
@@ -85,6 +120,8 @@ cd ansible
 ansible-inventory --graph
 ansible postgresql_servers -m ping
 ```
+
+A host may also remain in the Alloy inventory/group. Application-role membership must not remove observability management.
 
 ---
 
@@ -156,7 +193,7 @@ ansible-playbook playbooks/postgresql.yml \
 
 Review all proposed changes. No unrelated service should be modified.
 
-Note: package installation and database modules can have limitations in check mode. Treat check mode as a preview, not as proof of runtime success.
+Package installation and database modules can have limitations in check mode. Treat check mode as a preview, not as proof of runtime success.
 
 ---
 
@@ -315,7 +352,31 @@ Expected: create, insert, select and drop all succeed.
 
 ---
 
-# Stage 8 - Backup gate
+# Stage 8 - Observability regression check
+
+PostgreSQL installation must not silently break the already accepted host telemetry.
+
+After apply:
+
+```bash
+systemctl is-active alloy
+curl -fsS http://127.0.0.1:12345/-/healthy
+systemctl --failed --no-legend
+```
+
+Centrally confirm:
+
+```promql
+node_uname_info{hostname="<HOSTNAME>"}
+```
+
+Generate a unique journal event if there is any doubt about log flow.
+
+PostgreSQL-specific exporters/log parsing are separate enhancements. Do not delay host-level monitoring closure waiting for them.
+
+---
+
+# Stage 9 - Backup gate
 
 ## 20. Before storing important data
 
@@ -334,7 +395,7 @@ Do not treat an on-host VM snapshot as a database backup strategy.
 
 ---
 
-# Stage 9 - Rollback
+# Stage 10 - Rollback
 
 ## 21. Configuration rollback
 
@@ -343,7 +404,8 @@ If an Ansible configuration change breaks PostgreSQL:
 1. do not manually improvise changes unless needed for immediate recovery;
 2. revert the Git change;
 3. rerun the playbook;
-4. validate with `pg_isready` and the service checks above.
+4. validate with `pg_isready` and the service checks above;
+5. confirm Alloy/host observability remains healthy.
 
 ## 22. Fresh disposable install removal
 
@@ -357,6 +419,9 @@ Never delete `/var/lib/postgresql` or destroy the VM if it contains data that ha
 
 PostgreSQL installation is complete when:
 
+- [ ] IaC guest gate already passed.
+- [ ] Security-hardening gate already passed.
+- [ ] Observability gate already passed.
 - [ ] Ansible syntax check passes.
 - [ ] Playbook applies successfully.
 - [ ] PostgreSQL service is enabled and active.
@@ -368,5 +433,6 @@ PostgreSQL installation is complete when:
 - [ ] No plaintext secrets are committed.
 - [ ] A second Ansible run is idempotent.
 - [ ] Basic create/read/drop functional test passes on the disposable build.
+- [ ] Alloy remains healthy and host metrics/logs remain visible after installation.
 
 Then proceed to `runbooks/timescaledb-install.md`.
