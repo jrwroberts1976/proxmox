@@ -11,10 +11,16 @@ ansible/playbooks/nginx.yml
 ansible/roles/nginx/
 ```
 
-This is runbook 4 in the initial platform sequence:
+The required platform sequence is:
 
 ```text
-Linux VM IaC -> PostgreSQL -> TimescaleDB -> Nginx
+Linux VM IaC
+  -> guest acceptance
+  -> Linux security hardening
+  -> Alloy observability acceptance
+  -> PostgreSQL
+  -> TimescaleDB
+  -> Nginx
 ```
 
 Nginx may run on the same initial lab VM as PostgreSQL/TimescaleDB for the first proof, but the roles remain separate so it can later be moved to a dedicated web/proxy VM without redesigning the automation.
@@ -26,6 +32,8 @@ Nginx may run on the same initial lab VM as PostgreSQL/TimescaleDB for the first
 Required:
 
 - Linux VM deployment runbook has passed;
+- Linux security-hardening gate has passed;
+- observability gate has passed and remains healthy;
 - Ansible can reach the host;
 - intended Nginx role is understood: static site, reverse proxy, or application frontend;
 - upstream service address/port is known if proxying;
@@ -37,6 +45,8 @@ Verify from the target VM:
 ```bash
 ss -ltnp
 systemctl --failed
+systemctl is-active alloy
+curl -fsS http://127.0.0.1:12345/-/healthy
 ```
 
 From the controller:
@@ -45,6 +55,8 @@ From the controller:
 cd ansible
 ansible nginx_servers -m ping
 ```
+
+For a new Proxmox VM, authoritative host metrics/logs must already be reaching `ids-01` before Nginx installation begins.
 
 ---
 
@@ -90,7 +102,7 @@ all:
           ansible_host: <VM_IP>
 ```
 
-The same VM may also belong to `postgresql_servers` and `timescaledb_servers` during the initial proof.
+The same VM may also belong to `postgresql_servers` and `timescaledb_servers` during the initial proof and should remain under the Alloy management model established during observability commissioning.
 
 Validate:
 
@@ -328,26 +340,44 @@ Do not perform this test against a production dependency without a maintenance p
 
 # Stage 7 - Logging and observability
 
-## 20. Check logs
+## 20. Preserve the accepted host telemetry
+
+Host-level observability must already be commissioned through:
+
+```text
+runbooks/linux-vm-observability-bootstrap.md
+```
+
+After Nginx installation, re-check it has not regressed:
+
+```bash
+systemctl is-active alloy
+curl -fsS http://127.0.0.1:12345/-/healthy
+systemctl --failed --no-legend
+```
+
+Centrally verify:
+
+```promql
+node_uname_info{hostname="<HOSTNAME>"}
+```
+
+Generate a unique journal event if log flow needs to be re-proven.
+
+Check Nginx logs locally:
 
 ```bash
 journalctl -u nginx -n 100 --no-pager
 ls -l /var/log/nginx/
 ```
 
-Nginx logs should be included in the VM's central observability design where useful.
-
-Use:
-
-```text
-runbooks/linux-vm-observability-bootstrap.md
-```
+Application-specific Nginx access/error log ingestion can be added to Alloy deliberately after reviewing volume and sensitivity. Do not recursively ingest arbitrary log directories by default.
 
 At minimum monitor:
 
-- host availability;
+- host availability/metric absence;
 - CPU/RAM/disk usage;
-- service failure;
+- Nginx service failure;
 - relevant Nginx error logs.
 
 ---
@@ -391,7 +421,8 @@ If a site change fails:
 1. revert the site definition in Git;
 2. rerun the Ansible playbook;
 3. run `nginx -t`;
-4. verify HTTP behaviour.
+4. verify HTTP behaviour;
+5. confirm Alloy/host observability remains healthy.
 
 Avoid editing generated files manually because Ansible will overwrite them on the next run.
 
@@ -405,6 +436,7 @@ If Nginx is part of the first disposable platform proof and the entire build nee
 
 Nginx installation is complete when:
 
+- [ ] VM security/observability baseline was already accepted.
 - [ ] Ansible syntax check passes.
 - [ ] Playbook applies successfully.
 - [ ] `nginx -t` succeeds.
@@ -415,7 +447,8 @@ Nginx installation is complete when:
 - [ ] Internal remote HTTP test succeeds.
 - [ ] Reverse-proxy upstream works if configured.
 - [ ] No plaintext secrets are present in generated configuration/Git.
-- [ ] Service/log monitoring is commissioned or planned.
+- [ ] Alloy remains healthy and host metrics/logs remain visible after installation.
+- [ ] Nginx service/log alerting strategy is defined where required.
 - [ ] Second Ansible run is idempotent.
 
-At this point the initial Linux + PostgreSQL + TimescaleDB + Nginx platform build has passed its component installation gates and can move to integrated testing, monitoring, backup/restore and application-specific configuration.
+At this point the initial Linux + PostgreSQL + TimescaleDB + Nginx platform build has passed its component installation gates and can move to integrated testing, backup/restore, application-specific observability and service-specific alerting.
