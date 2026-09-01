@@ -10,8 +10,8 @@
     that:
       - alloy_prometheus_remote_write_url is match('^https?://')
       - alloy_loki_write_url is match('^https?://')
-      - '<' not in alloy_prometheus_remote_write_url
-      - '<' not in alloy_loki_write_url
+      - "'<' not in alloy_prometheus_remote_write_url"
+      - "'<' not in alloy_loki_write_url"
     fail_msg: "Set real Prometheus and Loki destination URLs before running the Alloy role."
 
 - name: Confirm Prometheus is reachable before installation
