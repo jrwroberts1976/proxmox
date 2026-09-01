@@ -34,6 +34,10 @@
   changed_when: false
   when: alloy_journal_logs_enabled | bool
 
+- name: Gather installed package facts
+  ansible.builtin.package_facts:
+    manager: auto
+
 - name: Install Grafana repository prerequisites
   ansible.builtin.apt:
     name:
@@ -73,6 +77,17 @@
     name: "{{ alloy_package_name }}"
     state: present
     update_cache: true
+
+# On a first installation, Ansible check mode correctly predicts the package
+# change but does not create the package-provided alloy user, group, directories
+# or binary. End the host here so a dry run remains useful instead of failing on
+# resources that can only exist after the real package installation. Once Alloy
+# is installed, later --check --diff runs continue through the full role.
+- name: End first-install dry run before package-dependent configuration
+  ansible.builtin.meta: end_host
+  when:
+    - ansible_check_mode
+    - "'alloy' not in ansible_facts.packages"
 
 - name: Add Alloy service account to journal-readable groups
   ansible.builtin.user:
