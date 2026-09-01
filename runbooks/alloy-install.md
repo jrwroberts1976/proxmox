@@ -11,6 +11,12 @@ Linux VM
    |
    +--> prometheus.exporter.unix
    |        |
+   |        +--> discovery.relabel
+   |        |        |
+   |        |        +--> hostname=<stable name>
+   |        |        +--> host=<stable name>
+   |        |        +--> job=linux-hosts
+   |        |
    |        +--> prometheus.scrape
    |                 |
    |                 +--> prometheus.remote_write
@@ -82,7 +88,8 @@ The role manages:
 - configuration validation before restart;
 - service enable/start state;
 - readiness and health checks;
-- journal-read validation as the `alloy` account.
+- journal-read validation as the `alloy` account;
+- Linux metric label normalization for the established Grafana dashboard contract.
 
 Manual commands in this runbook are recovery/debugging references, not the preferred configuration source.
 
@@ -101,6 +108,9 @@ Manual commands in this runbook are recovery/debugging references, not the prefe
 | Local HTTP/UI | `127.0.0.1:12345` |
 | Metrics backend | `192.168.2.242:9090` |
 | Logs backend | `192.168.2.242:3100` |
+| Canonical host label | `hostname=<stable name>` |
+| Dashboard compatibility label | `host=<stable name>` |
+| Linux metrics job | `linux-hosts` |
 | Environment label | `homelab` |
 
 VM101 validated Alloy version on 2026-09-01:
@@ -110,6 +120,40 @@ v1.19.2
 ```
 
 The role does not pin that package version yet; record the installed version during commissioning and deliberately control upgrades.
+
+---
+
+## 5. Established Grafana label contract
+
+The provisioned `Linux OS Monitoring` dashboard on `ids-01` was inspected on 2026-09-01.
+
+Its host variable is:
+
+```text
+label_values(up{job="linux-hosts"}, host)
+```
+
+Its core panel queries also filter on:
+
+```text
+job="linux-hosts"
+host=~"$host"
+```
+
+Therefore new Alloy-managed Linux metrics must expose:
+
+```text
+job=linux-hosts
+host=<stable hostname>
+```
+
+The role also keeps:
+
+```text
+hostname=<stable hostname>
+```
+
+as the canonical identity for new queries, alerts and cross-signal correlation. Do not remove `host`/`job=linux-hosts` until Grafana dashboards and alerts have been deliberately migrated to a different contract.
 
 ---
 
@@ -294,6 +338,16 @@ discovery.relabel "linux" {
   }
 
   rule {
+    target_label = "host"
+    replacement  = "<HOSTNAME>"
+  }
+
+  rule {
+    target_label = "job"
+    replacement  = "linux-hosts"
+  }
+
+  rule {
     target_label = "role"
     replacement  = "<ROLE>"
   }
@@ -342,13 +396,19 @@ Do not create a second node_exporter path for the same host.
 
 A healthy Alloy process alone is not enough.
 
-Query authoritative Prometheus:
+Canonical query:
 
 ```promql
 node_uname_info{hostname="<HOSTNAME>"}
 ```
 
-Expected: exactly one host series.
+Dashboard-compatible query:
+
+```promql
+node_uname_info{job="linux-hosts",host="<HOSTNAME>"}
+```
+
+Expected: exactly one current host series from each selector, representing the same Alloy path.
 
 Also verify:
 
@@ -359,27 +419,34 @@ node_cpu_seconds_total{hostname="<HOSTNAME>"}
 node_filesystem_size_bytes{hostname="<HOSTNAME>"}
 ```
 
-For VM101 the observed labels are:
+Expected current labels:
 
 ```text
-hostname=app-platform-01
-instance=app-platform-01
-job=integrations/unix
-role=application
+hostname=<HOSTNAME>
+host=<HOSTNAME>
+instance=<HOSTNAME>
+job=linux-hosts
+role=<ROLE>
 environment=homelab
 ```
+
+### VM101 migration note
+
+Before the Grafana-compatibility correction, VM101 metrics were observed with `job=integrations/unix` and no `host` compatibility label. That proved remote-write ingestion but could not satisfy the established Linux dashboard selector.
+
+After applying the corrected role, verify the current `job=linux-hosts`/`host=app-platform-01` series before closing the Grafana gate.
 
 Remote-written hosts do not appear as a normal scrape target in Prometheus `/targets`. Validate them by querying the metrics themselves.
 
 Duplicate check:
 
 ```promql
-count by (hostname, instance, job) (
+count by (hostname, host, instance, job) (
   node_uname_info{hostname="<HOSTNAME>"}
 )
 ```
 
-Normal new-VM expectation: one authoritative series/path.
+Normal new-VM expectation: one current authoritative series/path. Historical samples from the previous label set may remain queryable for their retention window; use current instant queries to distinguish history from an active duplicate collector.
 
 ---
 
@@ -418,29 +485,24 @@ Do not hard-code dashboard logic around an assumed `job="systemd-journal"` label
 
 # Stage 9 - Grafana acceptance
 
-Grafana is authoritative on `ids-01` and uses its local Prometheus/Loki services.
+The provisioned `Linux OS Monitoring` dashboard uses:
 
-For a new host prove dashboard-source data first:
-
-```promql
-node_uname_info{hostname="<HOSTNAME>"}
+```text
+label_values(up{job="linux-hosts"}, host)
 ```
 
-```promql
-100 * (
-  1 - avg by (hostname) (
-    rate(node_cpu_seconds_total{hostname="<HOSTNAME>",mode="idle"}[5m])
-  )
-)
-```
+for its host selector and its panels filter on the same `job` and `host` labels.
+
+After Alloy is applied, prove:
 
 ```promql
-node_memory_MemTotal_bytes{hostname="<HOSTNAME>"}
+up{job="linux-hosts",host="<HOSTNAME>"}
+node_uname_info{job="linux-hosts",host="<HOSTNAME>"}
+node_memory_MemTotal_bytes{job="linux-hosts",host="<HOSTNAME>"}
+node_filesystem_size_bytes{job="linux-hosts",host="<HOSTNAME>"}
 ```
 
-```promql
-node_filesystem_size_bytes{hostname="<HOSTNAME>"}
-```
+Then confirm the VM appears in the dashboard's `Linux host` selector and core panels populate.
 
 Current provisioned Linux/node dashboards on `ids-01` include:
 
@@ -449,8 +511,6 @@ homelab-noc2.json
 homelab-noc.json
 linux-os-monitoring.json
 ```
-
-VM101 has already proven Prometheus data for the host selectors and core dashboard queries.
 
 ---
 
@@ -471,7 +531,7 @@ curl -fsS http://127.0.0.1:12345/-/ready
 curl -fsS http://127.0.0.1:12345/-/healthy
 ```
 
-Then re-run the Prometheus query and generate another unique journal event.
+Then re-run the Prometheus canonical/dashboard-compatible queries and generate another unique journal event.
 
 ---
 
@@ -487,11 +547,14 @@ Then re-run the Prometheus query and generate another unique journal event.
 - [ ] Health passes.
 - [ ] Alloy can read journal as unprivileged account.
 - [ ] Metrics visible in authoritative Prometheus.
+- [ ] `hostname=<HOSTNAME>` present.
+- [ ] `host=<HOSTNAME>` present.
+- [ ] `job=linux-hosts` present.
 - [ ] Core CPU/memory/filesystem metrics visible.
-- [ ] Expected host/role/environment labels present.
 - [ ] Duplicate metrics check passes.
 - [ ] Unique journal event visible in authoritative Loki.
-- [ ] Grafana dashboard-source queries return data.
+- [ ] VM appears in the `Linux OS Monitoring` host selector.
+- [ ] Dashboard core panels populate.
 - [ ] Second Ansible apply is idempotent.
 - [ ] Reboot persistence passes.
 - [ ] No secrets entered Git plaintext.
@@ -537,8 +600,9 @@ Ready: PASS / FAIL
 Healthy: PASS / FAIL
 Journal access: PASS / FAIL
 Metrics E2E: PASS / FAIL
+Dashboard label compatibility: PASS / FAIL
 Logs E2E: PASS / FAIL
-Grafana data: PASS / FAIL
+Grafana dashboard: PASS / FAIL
 Duplicate check: PASS / FAIL
 Reboot persistence: PASS / FAIL
 Date:
