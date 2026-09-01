@@ -1,0 +1,6 @@
+---
+- name: Restart Alloy
+  ansible.builtin.service:
+    name: alloy
+    state: restarted
+    enabled: true
