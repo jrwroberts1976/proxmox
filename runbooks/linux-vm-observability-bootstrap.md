@@ -2,9 +2,9 @@
 
 ## 1. Purpose
 
-This runbook defines the standard observability commissioning procedure for every new Debian-family Linux VM created on the Proxmox platform.
+This runbook defines the standard observability commissioning procedure for new Debian-family Linux VMs created on the Proxmox platform.
 
-The preferred new-VM architecture is:
+The preferred architecture is one native Grafana Alloy service on each new VM, forwarding Linux metrics to the authoritative Prometheus instance and system/application logs to the authoritative Loki instance.
 
 ```text
 New Linux VM
@@ -18,29 +18,63 @@ New Linux VM
           |               +--> prometheus.remote_write
           |                       |
           |                       v
-          |                   Prometheus
+          |              ids-01 Prometheus
           |
           +--> loki.source.journal / loki.source.file
                   |
                   +--> loki.write
                           |
                           v
-                         Loki
+                     ids-01 Loki
 
-Prometheus + Loki
-       |
-       v
-     Grafana
-       |
-       +--> dashboards
-       +--> alerts
+ids-01 Prometheus + Loki
+          |
+          v
+       Grafana
+          |
+          +--> dashboards
+          +--> alerts
 ```
 
-The objective is that a VM is not considered production-ready until both metrics and logs are visible centrally and the host participates in alerting.
+A VM is not considered observability-ready until both metrics and logs are visible centrally, duplicate collection has been excluded, and reboot persistence has been tested.
 
 ---
 
-## 2. Preferred standard versus legacy compatibility
+## 2. Current homelab monitoring authority
+
+As verified on 2026-09-01, the authoritative monitoring stack is on `ids-01`.
+
+| Component | Authority | LAN endpoint | Notes |
+|---|---|---|---|
+| Prometheus | `ids-01` | `http://192.168.2.242:9090` | Remote-write receiver enabled |
+| Loki | `ids-01` | `http://192.168.2.242:3100` | Ready and reachable from VM101 |
+| Grafana | `ids-01` | `https://grafana.jrwroberts.co.uk/` | Uses Docker-local Prometheus/Loki datasources |
+
+Grafana's provisioned datasource URLs on `ids-01` are:
+
+```text
+http://prometheus:9090
+http://loki:3100
+```
+
+Those Docker service names are valid only inside the `ids-01` monitoring Docker network. A separate VM must use the LAN-reachable `192.168.2.242` endpoints.
+
+### Important authority rule
+
+Do not assume that a host called `prometheus` or any reachable TCP/9090 service is the monitoring authority.
+
+The homelab currently contains more than one Prometheus deployment. Before commissioning a VM, verify the authority by checking:
+
+1. where Grafana is running;
+2. Grafana's provisioned datasource configuration;
+3. the Prometheus target/job inventory;
+4. the Loki datasource and readiness endpoint.
+
+For new Proxmox VMs, use `ids-01` unless the architecture is deliberately changed and this runbook is updated.
+
+---
+
+## 3. Preferred standard versus legacy compatibility
 
 ### Preferred standard for new Proxmox VMs
 
@@ -50,11 +84,11 @@ Use one native Alloy service for both:
 - system logs via `loki.source.journal`;
 - selected application logs via `loki.source.file` where required.
 
-This avoids deploying a separate node_exporter service when Alloy is already present.
+Do not deploy a separate `prometheus-node-exporter` on a new VM when Alloy is already exporting the same node metrics.
 
 ### Existing/legacy direct-scrape hosts
 
-Some existing homelab hosts may already use:
+Some existing homelab hosts use:
 
 ```text
 prometheus-node-exporter :9100
@@ -63,66 +97,66 @@ prometheus-node-exporter :9100
 Prometheus direct scrape
 ```
 
-That remains valid where already established. Use the separate Linux Monitoring in Grafana runbook for those hosts.
+That remains valid for established hosts. Use `runbooks/linux-monitoring-grafana.md` for that compatibility path.
 
-Do not collect the same host twice through both direct node_exporter scraping and Alloy remote write unless a temporary migration test is explicitly intended.
+Do not collect the same host through both direct node_exporter scraping and Alloy remote write unless a temporary migration comparison is explicitly intended.
 
 ---
 
-## 3. Scope
+## 4. Scope
 
 This runbook covers:
 
-- host identity and operating-system baseline;
-- central Prometheus/Loki preflight;
-- Alloy installation dependency;
+- VM identity and OS baseline;
+- monitoring-authority verification;
+- network/firewall preflight;
+- Prometheus remote-write receiver preflight;
+- Alloy installation and configuration;
 - Linux metrics commissioning;
 - journal log commissioning;
-- optional application log commissioning;
+- optional application logs;
 - Grafana validation;
-- minimum alert coverage;
 - duplicate collection checks;
-- controlled end-to-end tests;
-- acceptance, rollback, and handover;
-- the eventual Ansible automation model.
+- alerting acceptance;
+- reboot persistence;
+- rollback and handover;
+- the intended Ansible automation model.
 
-It does not provision the VM itself. VM creation belongs to the OpenTofu/cloud-init layer.
+VM creation itself belongs to OpenTofu/cloud-init.
 
 ---
 
-## 4. Related runbooks
-
-Use these procedures as component references:
+## 5. Related runbooks
 
 ```text
 runbooks/alloy-install.md
 runbooks/alloy-linux-monitoring.md
 runbooks/prometheus-install.md
 runbooks/loki-install.md
-runbooks/linux-monitoring-grafana.md    # direct node_exporter compatibility path
+runbooks/linux-monitoring-grafana.md
+runbooks/linux-vm-security-hardening.md
+runbooks/linux-vm-iac-deployment.md
 ```
-
-Some related runbooks may be delivered through separate documentation PRs until the documentation set is merged into `main`.
 
 ---
 
-## 5. Required commissioning values
+## 6. Required commissioning values
 
-Before starting, record:
+For the current homelab authority:
 
 ```text
 VM_HOSTNAME=
 VM_IP=
 VM_ROLE=
 ENVIRONMENT=homelab
-PROMETHEUS_HOST=
+PROMETHEUS_HOST=192.168.2.242
 PROMETHEUS_PORT=9090
-LOKI_HOST=
+LOKI_HOST=192.168.2.242
 LOKI_PORT=3100
-GRAFANA_URL=
+GRAFANA_URL=https://grafana.jrwroberts.co.uk/
 ```
 
-Recommended `VM_ROLE` values include:
+Recommended `VM_ROLE` values:
 
 ```text
 application
@@ -140,9 +174,7 @@ Use stable, lowercase label values where practical.
 
 # Stage 0 - Infrastructure gate
 
-## 6. Confirm VM provisioning is complete
-
-Before installing observability tooling:
+## 7. Confirm VM provisioning is complete
 
 ```bash
 hostnamectl
@@ -159,40 +191,79 @@ Expected:
 - intended hostname is set;
 - intended management IP exists;
 - default route is correct;
-- Debian-family OS is supported;
+- supported Debian-family OS is installed;
 - time synchronisation is healthy;
 - no unexpected failed services exist.
 
 If identity or networking is wrong, fix the OpenTofu/cloud-init/Ansible source rather than compensating in monitoring configuration.
 
+Security hardening should be complete before application deployment. Observability should be commissioned before PostgreSQL, TimescaleDB, Nginx, or other application services are treated as production-ready.
+
 ---
 
-# Stage 1 - Central observability preflight
+# Stage 1 - Verify the monitoring authority
 
-## 7. Confirm Prometheus
+## 8. Confirm Grafana, Prometheus and Loki are on the intended host
 
-From the new VM:
+On the candidate monitoring authority:
 
 ```bash
-curl -fsS http://<PROMETHEUS_HOST>:9090/-/ready
+docker ps --format '{{.Names}}\t{{.Image}}\t{{.Ports}}' |
+  grep -E '^(prometheus|grafana|loki)[[:space:]]'
 ```
 
-Expected: success.
+Inspect Grafana datasource provisioning:
 
-Prometheus must be running with:
+```bash
+grep -RniE 'name:|type:|url:|prometheus|loki' \
+  /home/james/docker/data/monitoring/grafana/provisioning/datasources
+```
+
+For the current authority, the host must be `ids-01` / `192.168.2.242`.
+
+Check Prometheus target health:
+
+```bash
+curl -fsS http://127.0.0.1:9090/api/v1/targets |
+jq -r '
+  "active=" + ((.data.activeTargets | length) | tostring),
+  "healthy=" + ([.data.activeTargets[] | select(.health == "up")] | length | tostring),
+  "unhealthy=" + ([.data.activeTargets[] | select(.health != "up")] | length | tostring)
+'
+```
+
+The verified baseline at the time this runbook was updated was:
 
 ```text
---web.enable-remote-write-receiver
+active=26
+healthy=26
+unhealthy=0
 ```
 
-for the preferred Alloy metrics path.
+Treat this as a commissioning reference, not a permanently fixed target count; intentionally added or removed scrape jobs can change it.
 
 ---
 
-## 8. Confirm Loki
+# Stage 2 - Central endpoint preflight
+
+## 9. Test Prometheus from the new VM
 
 ```bash
-curl -fsS http://<LOKI_HOST>:3100/ready
+curl -fsS --connect-timeout 5 \
+  http://192.168.2.242:9090/-/ready
+```
+
+Expected:
+
+```text
+Prometheus Server is Ready.
+```
+
+## 10. Test Loki from the new VM
+
+```bash
+curl -fsS --connect-timeout 5 \
+  http://192.168.2.242:3100/ready
 ```
 
 Expected:
@@ -201,15 +272,103 @@ Expected:
 ready
 ```
 
-If Prometheus or Loki is not reachable, stop here. Do not commission a telemetry agent against a broken destination.
+If either connection fails, stop here. Do not install/configure Alloy against an unreachable destination.
+
+### Firewall diagnosis
+
+If ping/SSH works but monitoring ports time out, inspect the destination host firewall and Docker forwarding path before changing the VM.
+
+Useful checks:
+
+```bash
+sudo iptables -S FORWARD
+sudo iptables -S DOCKER-USER
+sudo nft list ruleset
+```
+
+Docker-published traffic may traverse `FORWARD` and `DOCKER-USER`, so an ordinary UFW `INPUT` allow rule may not be sufficient.
+
+Do not open monitoring ports to the whole LAN merely to make commissioning pass. Prefer the narrowest source-specific rule required by the architecture.
 
 ---
 
-# Stage 2 - Install Alloy
+# Stage 3 - Prometheus remote-write receiver gate
 
-## 9. Install using the Alloy installation runbook
+## 11. Confirm the receiver is enabled
 
-Follow the standard Alloy installation procedure.
+On `ids-01`:
+
+```bash
+docker inspect prometheus \
+  --format '{{range .Config.Cmd}}{{println .}}{{end}}'
+```
+
+Required flag:
+
+```text
+--web.enable-remote-write-receiver
+```
+
+The persistent authority is currently:
+
+```text
+/home/james/docker/stacks/monitoring/docker-compose.yml
+```
+
+The Prometheus command list must include:
+
+```yaml
+command:
+  - "--config.file=/etc/prometheus/prometheus.yml"
+  - "--storage.tsdb.path=/prometheus"
+  - "--web.enable-lifecycle"
+  - "--web.enable-remote-write-receiver"
+```
+
+Before changing the Compose source:
+
+1. make a timestamped backup;
+2. review the diff;
+3. run `docker compose config -q`;
+4. recreate only Prometheus;
+5. wait for target discovery to settle;
+6. prove the previous target-health baseline returns.
+
+Example controlled apply:
+
+```bash
+cd /home/james/docker/stacks/monitoring
+
+docker compose config -q
+
+docker compose up \
+  -d \
+  --no-deps \
+  --force-recreate \
+  prometheus
+```
+
+After restart, do not treat `active_targets=0` immediately after startup as failure. Wait for service discovery and the first scrape cycle.
+
+Verified on 2026-09-01, the `ids-01` instance returned to:
+
+```text
+active_targets=26
+healthy_targets=26
+unhealthy_targets=0
+```
+
+with the remote-write receiver enabled.
+
+---
+
+# Stage 4 - Install Alloy
+
+## 12. Install using Ansible
+
+For new Proxmox VMs, Alloy should be installed and configured through the Proxmox repository Ansible implementation rather than as an undocumented manual package install.
+
+Use the standard Alloy installation procedure/role.
 
 Acceptance before continuing:
 
@@ -221,19 +380,20 @@ curl -fsS http://127.0.0.1:12345/-/healthy
 
 Expected:
 
+- `alloy.service` enabled;
 - `alloy.service` active;
 - readiness passes;
 - health passes.
 
-Do not make Alloy run as root simply to obtain journal/application-log access. Use groups/ACLs appropriate to the required sources.
+Keep the Alloy HTTP/UI listener local to the VM unless a documented operational requirement needs remote access.
+
+Do not run Alloy as root merely to obtain journal/application-log access. Use appropriate journal-readable groups or ACLs.
 
 ---
 
-# Stage 3 - Build the combined Alloy pipeline
+# Stage 5 - Build the combined Alloy pipeline
 
-## 10. Baseline configuration model
-
-The final configuration should logically contain:
+## 13. Baseline configuration model
 
 ```text
 METRICS
@@ -243,35 +403,27 @@ discovery.relabel
         |
 prometheus.scrape
         |
-prometheus.remote_write ---> Prometheus
+prometheus.remote_write ---> 192.168.2.242:9090
 
 LOGS
 loki.source.journal
         |
-loki.write -----------------> Loki
+loki.write -----------------> 192.168.2.242:3100
 ```
 
-Optional application files add:
+Optional application files:
 
 ```text
 local.file_match
         |
 loki.source.file
         |
-loki.write -----------------> Loki
+loki.write -----------------> 192.168.2.242:3100
 ```
 
----
-
-## 11. Example combined configuration
-
-The following is a commissioning baseline. Integrate it with existing Alloy configuration rather than blindly replacing unrelated pipelines.
+## 14. Example combined configuration
 
 ```alloy
-// -----------------------------------------------------------------------------
-// Linux host metrics
-// -----------------------------------------------------------------------------
-
 prometheus.exporter.unix "linux" {
 }
 
@@ -302,13 +454,9 @@ prometheus.scrape "linux" {
 
 prometheus.remote_write "homelab" {
   endpoint {
-    url = "http://<PROMETHEUS_HOST>:9090/api/v1/write"
+    url = "http://192.168.2.242:9090/api/v1/write"
   }
 }
-
-// -----------------------------------------------------------------------------
-// Linux systemd journal
-// -----------------------------------------------------------------------------
 
 loki.source.journal "system" {
   forward_to = [loki.write.homelab.receiver]
@@ -323,77 +471,60 @@ loki.source.journal "system" {
 
 loki.write "homelab" {
   endpoint {
-    url = "http://<LOKI_HOST>:3100/loki/api/v1/push"
+    url = "http://192.168.2.242:3100/loki/api/v1/push"
   }
 }
 ```
 
-Use LAN-resolvable destinations from a systemd Alloy installation.
-
-Do not assume Docker-only service names such as `prometheus` or `loki` will resolve on the VM.
+Do not use Docker-only names such as `prometheus` or `loki` from a separate systemd-based VM.
 
 ---
 
-# Stage 4 - Journal permissions
+# Stage 6 - Journal permissions
 
-## 12. Confirm Alloy can read the journal
-
-Check service identity:
+## 15. Confirm Alloy can read the journal
 
 ```bash
 id alloy
-```
-
-Test journal access as Alloy where practical:
-
-```bash
 sudo -u alloy journalctl -n 5 --no-pager
 ```
 
-If access is denied, use the system's approved group/ACL model, commonly involving journal-readable groups.
-
-After changing group membership, restart Alloy:
+If access is denied, use the approved group/ACL model. After changing group membership:
 
 ```bash
 sudo systemctl restart alloy
 ```
 
-Do not change Alloy to run as root solely for journal access.
+Do not change the service to root solely for journal access.
 
 ---
 
-# Stage 5 - Validate configuration
+# Stage 7 - Validate configuration
 
-## 13. Preserve current config
+## 16. Validate before restart
+
+Preserve the previous configuration where one exists:
 
 ```bash
 sudo cp /etc/alloy/config.alloy \
   /etc/alloy/config.alloy.before-observability-bootstrap
 ```
 
-After editing:
+Validate:
 
 ```bash
 sudo alloy validate /etc/alloy/config.alloy
 ```
 
-Expected: validation succeeds.
+Review the intended diff before restart.
 
-Review diff:
-
-```bash
-sudo diff -u \
-  /etc/alloy/config.alloy.before-observability-bootstrap \
-  /etc/alloy/config.alloy
-```
-
-Do not restart with invalid configuration.
+The Ansible role should perform validation before notifying/restarting Alloy.
 
 ---
 
-# Stage 6 - Apply Alloy configuration
+# Stage 8 - Apply Alloy configuration
 
-## 14. Restart and validate
+## 17. Restart and validate
 
 ```bash
 sudo systemctl restart alloy
@@ -406,18 +537,16 @@ journalctl -u alloy -n 100 --no-pager
 Expected:
 
 - service active;
-- readiness healthy;
+- readiness/health healthy;
 - no repeated remote-write failures;
 - no repeated Loki push failures;
 - no journal permission failures.
 
 ---
 
-# Stage 7 - Metrics end-to-end test
+# Stage 9 - Metrics end-to-end test
 
-## 15. Validate in Prometheus
-
-Query:
+## 18. Validate in Prometheus
 
 ```promql
 node_uname_info{hostname="<VM_HOSTNAME>"}
@@ -425,7 +554,7 @@ node_uname_info{hostname="<VM_HOSTNAME>"}
 
 Expected: one result.
 
-Check:
+Also check:
 
 ```promql
 node_memory_MemTotal_bytes{hostname="<VM_HOSTNAME>"}
@@ -443,7 +572,7 @@ node_cpu_seconds_total{hostname="<VM_HOSTNAME>"}
 node_filesystem_size_bytes{hostname="<VM_HOSTNAME>"}
 ```
 
-Confirm labels:
+Required labels:
 
 ```text
 hostname=<VM_HOSTNAME>
@@ -453,9 +582,9 @@ environment=homelab
 
 ---
 
-# Stage 8 - Logs end-to-end test
+# Stage 10 - Logs end-to-end test
 
-## 16. Generate unique journal event
+## 19. Generate a unique journal event
 
 ```bash
 TEST_ID="observability-$(hostname)-$(date +%s)"
@@ -463,25 +592,21 @@ logger -t homelab-observability-test "$TEST_ID"
 echo "$TEST_ID"
 ```
 
-In Grafana Explore using Loki, search for the exact test ID.
-
-Example starting query:
+In Grafana Explore using Loki:
 
 ```logql
 {hostname="<VM_HOSTNAME>"} |= "<TEST_ID>"
 ```
 
-Expected: the unique event appears with the correct host labels.
+Expected: the exact event appears with the correct host labels.
 
-Do not accept `alloy.service active` as proof of log delivery.
+`alloy.service active` by itself is not proof of successful log delivery.
 
 ---
 
-# Stage 9 - Grafana dashboard acceptance
+# Stage 11 - Grafana dashboard acceptance
 
-## 17. Linux host dashboard
-
-The host should appear in the normal Linux-host dashboard selector.
+## 20. Linux host dashboard
 
 Minimum visible data:
 
@@ -498,25 +623,21 @@ Minimum visible data:
 
 Temperature panels may legitimately be empty for VMs.
 
-In Grafana Explore, the following must work:
+In Grafana Explore both must work:
 
 ```promql
 node_uname_info{hostname="<VM_HOSTNAME>"}
 ```
 
-and:
-
 ```logql
 {hostname="<VM_HOSTNAME>"}
 ```
 
-This proves both metrics and logs are searchable using the same stable host identity.
-
 ---
 
-# Stage 10 - Duplicate collection gate
+# Stage 12 - Duplicate collection gate
 
-## 18. Check node metrics cardinality
+## 21. Check node metrics cardinality
 
 ```promql
 count by (hostname, instance, job) (
@@ -524,24 +645,23 @@ count by (hostname, instance, job) (
 )
 ```
 
-Investigate if the host appears unexpectedly through multiple paths.
+Investigate unexpected multiple paths.
 
 Possible duplicate sources:
 
 - separate `prometheus-node-exporter` direct scrape;
 - Alloy `prometheus.exporter.unix` remote write;
 - multiple Alloy instances;
-- stale/mislabelled targets.
+- stale/mislabelled targets;
+- commissioning against the wrong Prometheus authority.
 
-For a new Proxmox VM, prefer the Alloy pipeline unless the infrastructure design explicitly chooses direct node_exporter scraping.
+For a new Proxmox VM, prefer the Alloy pipeline.
 
 ---
 
-# Stage 11 - Alerting gate
+# Stage 13 - Alerting gate
 
-## 19. Minimum operational coverage
-
-Before production use, the VM should have a defined alert strategy for:
+## 22. Minimum operational coverage
 
 | Condition | Starting point |
 |---|---|
@@ -553,7 +673,7 @@ Before production use, the VM should have a defined alert strategy for:
 | Critical application/service failure | service-specific |
 | Log pipeline failure | Alloy/Loki monitoring |
 
-For Alloy remote-written hosts, an absence rule can detect missing host metrics:
+Example missing-metrics rule:
 
 ```promql
 absent_over_time(
@@ -561,61 +681,34 @@ absent_over_time(
 )
 ```
 
-The final alert should be tested in the homelab alerting system before being treated as reliable.
+Alerting is not accepted until the configured notification path has been tested.
 
 ---
 
-# Stage 12 - Optional application logs
+# Stage 14 - Optional application logs
 
-## 20. Add only required files
+## 23. Add only required files
 
-Do not recursively ingest arbitrary directories.
+Do not recursively ingest arbitrary application directories.
 
-For each required application log:
+For each file source:
 
-1. identify exact file path/glob;
+1. identify the exact path/glob;
 2. confirm rotation behaviour;
-3. give Alloy the minimum read permission;
-4. add stable labels;
+3. give Alloy minimum read permission;
+4. apply stable labels;
 5. validate configuration;
-6. restart Alloy;
+6. restart through Ansible/handler;
 7. generate/search a unique event;
 8. monitor ingestion volume.
 
-Application-specific parsing should live in a dedicated runbook/role extension rather than growing the base bootstrap indefinitely.
+Application-specific parsing belongs in a dedicated role/runbook extension.
 
 ---
 
-# Stage 13 - Optional direct node_exporter compatibility path
+# Stage 15 - Reboot persistence
 
-## 21. When to use a separate node_exporter
-
-Use the direct node_exporter path when:
-
-- migrating an existing host already scraped by Prometheus;
-- a central Prometheus scrape model is deliberately preferred;
-- Alloy remote write is not enabled;
-- operational compatibility requires the existing `up{job="node"}` alert model.
-
-Then the architecture becomes:
-
-```text
-Linux VM
-   +--> prometheus-node-exporter :9100 --> Prometheus
-   +--> Alloy --------------------------> Loki
-```
-
-Follow the separate Linux Monitoring in Grafana runbook.
-
-Do not also enable `prometheus.exporter.unix` for the same host unless intentionally comparing paths.
-
----
-
-# Stage 14 - Reboot persistence test
-
-## 22. Reboot the VM
-
-After initial commissioning and before production acceptance:
+## 24. Reboot the VM
 
 ```bash
 sudo reboot
@@ -628,36 +721,36 @@ systemctl is-active alloy
 curl -fsS http://127.0.0.1:12345/-/ready
 ```
 
-Then recheck:
+Recheck metrics and generate another unique journal event.
 
-```promql
-node_uname_info{hostname="<VM_HOSTNAME>"}
-```
-
-and generate another unique journal event.
-
-A configuration that only works until reboot is not accepted.
+A configuration that works only until reboot is not accepted.
 
 ---
 
-# Stage 15 - Acceptance gate
+# Stage 16 - Acceptance gate
 
-## 23. VM observability checklist
-
-A new Linux VM is observability-ready only when all applicable items pass:
+## 25. VM observability checklist
 
 ### Host
 
 - [ ] Correct hostname.
-- [ ] Correct IP/network.
+- [ ] Correct/stable IP identity.
 - [ ] Time sync healthy.
 - [ ] No unexpected failed systemd services.
 
+### Central platform
+
+- [ ] Monitoring authority verified as intended.
+- [ ] Prometheus reachable from VM.
+- [ ] Loki reachable from VM.
+- [ ] Prometheus remote-write receiver enabled.
+- [ ] Existing Prometheus target-health baseline recovered after any central restart.
+
 ### Alloy
 
-- [ ] Alloy installed from approved source.
-- [ ] Alloy enabled at boot.
-- [ ] Alloy active.
+- [ ] Installed from approved source through Ansible.
+- [ ] Enabled at boot.
+- [ ] Active.
 - [ ] `/-/ready` passes.
 - [ ] `/-/healthy` passes.
 - [ ] Configuration validation passes.
@@ -678,12 +771,12 @@ A new Linux VM is observability-ready only when all applicable items pass:
 
 - [ ] Alloy can read systemd journal.
 - [ ] `loki.write` healthy.
-- [ ] unique test journal event visible in Loki.
+- [ ] unique journal test event visible in Loki.
 - [ ] expected log labels present.
 
 ### Grafana
 
-- [ ] VM appears in Linux dashboard.
+- [ ] VM appears in the Linux dashboard.
 - [ ] core panels populate.
 - [ ] metrics searchable in Explore.
 - [ ] logs searchable in Explore.
@@ -697,85 +790,114 @@ A new Linux VM is observability-ready only when all applicable items pass:
 
 ### Recovery/governance
 
-- [ ] VM passes reboot persistence test.
+- [ ] reboot persistence test passes.
 - [ ] configuration source is in Git.
 - [ ] no plaintext secrets entered Git.
 - [ ] rollback configuration exists until commissioning closes.
 
 ---
 
+# VM101 commissioning record
+
+## 26. `app-platform-01` status
+
+Commissioning values verified on 2026-09-01:
+
+```text
+VMID=101
+VM_HOSTNAME=app-platform-01
+VM_IP=192.168.2.253
+VM_ROLE=application
+ENVIRONMENT=homelab
+PROMETHEUS_HOST=192.168.2.242
+LOKI_HOST=192.168.2.242
+```
+
+Completed gates:
+
+- [x] VM running and QEMU guest agent healthy.
+- [x] Debian 13 baseline commissioned.
+- [x] Linux security-hardening controls applied and idempotence checked.
+- [x] VM101 can reach `ids-01` by network.
+- [x] VM101 -> `ids-01:9090` Prometheus readiness passes.
+- [x] VM101 -> `ids-01:3100` Loki readiness passes.
+- [x] `ids-01` confirmed as Grafana/Prometheus/Loki authority.
+- [x] `ids-01` Prometheus remote-write receiver enabled.
+- [x] Prometheus recovered to the verified 26/26 healthy-target baseline after controlled recreation.
+
+Next gate:
+
+```text
+Build and apply the reusable Ansible Alloy role to VM101.
+```
+
+Do not start PostgreSQL, TimescaleDB, or Nginx commissioning until the VM101 observability acceptance gate is closed.
+
+---
+
 # Rollback
 
-## 24. Roll back observability changes
+## 27. Alloy rollback
 
-Restore the prior Alloy configuration:
+Restore the previous Alloy configuration where applicable:
 
 ```bash
 sudo cp \
   /etc/alloy/config.alloy.before-observability-bootstrap \
   /etc/alloy/config.alloy
-```
 
-Validate:
-
-```bash
 sudo alloy validate /etc/alloy/config.alloy
-```
-
-Restart:
-
-```bash
 sudo systemctl restart alloy
 ```
 
-Confirm any pre-existing Alloy pipeline remains healthy.
+If Alloy was newly installed solely for a failed bootstrap, use the Alloy installation runbook's uninstall/rollback process rather than deleting files ad hoc.
 
-If Alloy was newly installed solely for this failed bootstrap and removal is required, use the Alloy installation runbook's uninstall/rollback procedure rather than deleting files ad hoc.
+## 28. Prometheus receiver rollback
+
+If remote-write support must be removed from the central Prometheus instance:
+
+1. restore/edit the Compose authority;
+2. remove only `--web.enable-remote-write-receiver`;
+3. run `docker compose config -q`;
+4. recreate only Prometheus;
+5. wait for service discovery;
+6. prove the previous scrape-target baseline returns.
+
+Do not roll back the receiver while any Alloy-managed host depends on it.
 
 ---
 
 # Troubleshooting
 
-## 25. Metrics work, logs do not
-
-Check:
+## 29. Metrics work, logs do not
 
 ```bash
 sudo -u alloy journalctl -n 5 --no-pager
 journalctl -u alloy -n 200 --no-pager
-curl -fsS http://<LOKI_HOST>:3100/ready
+curl -fsS http://192.168.2.242:3100/ready
 ```
-
-Likely areas:
-
-- journal permissions;
-- Loki URL;
-- DNS/routing;
-- Loki write component health.
-
----
-
-## 26. Logs work, metrics do not
 
 Check:
 
+- journal permissions;
+- Loki URL;
+- routing/firewall;
+- Loki component health.
+
+## 30. Logs work, metrics do not
+
 ```bash
 journalctl -u alloy -n 200 --no-pager
-curl -fsS http://<PROMETHEUS_HOST>:9090/-/ready
+curl -fsS http://192.168.2.242:9090/-/ready
 ```
 
-Confirm Prometheus remote-write receiver is enabled.
+Confirm:
 
-Inspect Alloy components:
+- `--web.enable-remote-write-receiver` is running on authoritative Prometheus;
+- Alloy exporter/relabel/scrape/remote-write components are healthy;
+- the VM is not sending to a non-authoritative Prometheus instance.
 
-- exporter;
-- relabel;
-- scrape;
-- remote write.
-
----
-
-## 27. Both pipelines fail after reboot
+## 31. Both pipelines fail after reboot
 
 ```bash
 systemctl status alloy
@@ -786,45 +908,50 @@ Check:
 
 - service enabled state;
 - config syntax;
-- DNS availability during boot;
 - network-online timing;
 - permissions/group membership;
 - destination reachability.
 
----
+## 32. `lookup prometheus` or `lookup loki` failure
 
-## 28. `lookup prometheus` or `lookup loki` failure
+Do not use Docker service names from the VM.
 
-If the config uses bare Docker service names from a remote VM, replace them with LAN-resolvable endpoints.
-
-Correct pattern from a separate VM:
+Correct current homelab URLs:
 
 ```text
-http://<MONITORING_VM_IP>:9090/api/v1/write
-http://<MONITORING_VM_IP>:3100/loki/api/v1/push
+http://192.168.2.242:9090/api/v1/write
+http://192.168.2.242:3100/loki/api/v1/push
 ```
 
-Docker service names are appropriate only inside the Docker networks that define them.
+## 33. Wrong Prometheus instance suspected
+
+Compare candidate servers:
+
+```bash
+curl -fsS http://<candidate>:9090/api/v1/status/buildinfo
+curl -fsS http://<candidate>:9090/api/v1/targets
+```
+
+Then verify which server is attached to Grafana through its datasource provisioning.
+
+Do not choose the authority based only on which endpoint happens to respond.
 
 ---
 
-# Future Ansible implementation
+# Ansible implementation
 
-## 29. Target role model
-
-The preferred eventual Ansible design is one Alloy role with observability feature switches:
+## 34. Target role model
 
 ```yaml
 alloy_enabled: true
-
 alloy_linux_metrics_enabled: true
 alloy_journal_logs_enabled: true
 
 alloy_prometheus_remote_write_url: >-
-  http://monitoring.example:9090/api/v1/write
+  http://192.168.2.242:9090/api/v1/write
 
 alloy_loki_write_url: >-
-  http://monitoring.example:3100/loki/api/v1/push
+  http://192.168.2.242:3100/loki/api/v1/push
 
 alloy_host_role: application
 alloy_environment: homelab
@@ -832,19 +959,22 @@ alloy_environment: homelab
 
 The role should:
 
-1. install Alloy;
-2. configure permissions;
-3. render metrics and log pipelines;
-4. run `alloy validate`;
-5. restart only when configuration changes;
-6. check readiness/health;
-7. fail deployment if Alloy is unhealthy.
+1. install Alloy from the approved Grafana repository;
+2. configure the unprivileged `alloy` service identity;
+3. grant the minimum journal-read access;
+4. render metrics and log pipelines;
+5. bind the local Alloy UI to loopback unless otherwise required;
+6. run `alloy validate` before restart;
+7. restart only when configuration changes;
+8. check readiness/health;
+9. fail deployment if Alloy is unhealthy;
+10. remain idempotent on a second Ansible run.
 
-A higher-level commissioning playbook can then perform central API checks and end-to-end tests.
+A higher-level commissioning playbook should perform the central Prometheus/Loki API checks and end-to-end acceptance tests.
 
 ---
 
-## 30. Target IaC chain
+## 35. Target IaC chain
 
 ```text
 Git
@@ -857,6 +987,7 @@ Git
  |
  +--> Ansible
  |      +--> OS baseline
+ |      +--> security hardening
  |      +--> Alloy
  |      +--> observability pipeline
  |
@@ -865,13 +996,14 @@ Git
         +--> Loki test log visible
         +--> Grafana host visible
         +--> alert coverage
+        +--> reboot persistence
 ```
 
-Observability should be part of VM creation, not a manual afterthought performed weeks later.
+Observability is part of VM commissioning, not an optional manual task performed after applications are deployed.
 
 ---
 
-## 31. Completion record
+## 36. Completion record
 
 ```text
 VM hostname:
