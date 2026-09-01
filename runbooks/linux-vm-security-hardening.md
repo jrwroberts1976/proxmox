@@ -2,128 +2,104 @@
 
 ## 1. Purpose
 
-Security hardening is a mandatory build stage for new Debian Linux VMs before application services such as PostgreSQL, TimescaleDB or Nginx are installed.
+Security hardening is a mandatory build stage for new Debian Linux VMs before observability and application services are commissioned.
 
-The current validated control set is implemented by the existing Ansible content under:
+The authoritative implementation is:
 
 ```text
 ansible/linux-security-hardening/
 ```
 
-This gate integrates those validated controls into the application-platform build without expanding their scope beyond what has already been tested.
-
-The required build order is:
+Required build order:
 
 ```text
 OpenTofu VM creation
         |
-        v
-Guest commissioning / cloud-init acceptance
+Guest/cloud-init acceptance
         |
-        v
 Linux security hardening
         |
-        v
-Observability / baseline acceptance
+Alloy observability acceptance
         |
-        v
 PostgreSQL
         |
-        v
 TimescaleDB
         |
-        v
 Nginx
 ```
 
-For VM `101` (`app-platform-01`), PostgreSQL installation must not begin until this hardening gate passes.
+Passing this runbook does **not** authorize jumping directly to PostgreSQL. The next mandatory gate is `linux-vm-observability-bootstrap.md`.
 
 ---
 
 ## 2. Validated controls
 
-The role currently applies two deliberately narrow controls that were already validated on Debian-family homelab hosts.
+The current role deliberately implements a narrow validated control set.
 
 ### 2.1 Remove weak OpenSSH UMAC-64 algorithms
 
-The role installs:
+Managed file:
 
 ```text
 /etc/ssh/sshd_config.d/90-homelab-macs.conf
 ```
 
-with:
+Policy:
 
 ```text
 MACs -umac-64-etm@openssh.com,umac-64@openssh.com
 ```
 
-Before SSH is reloaded, the role validates the configuration with:
+Before reload, the role validates:
 
 ```bash
 /usr/sbin/sshd -t
 ```
 
-It then checks the effective configuration with `sshd -T` and fails if either weak UMAC-64 algorithm remains.
+It then checks the effective `sshd -T` result and fails if either weak UMAC-64 algorithm remains.
 
 ### 2.2 Block IPv4 ICMP timestamp requests
 
-The role installs and enables:
+Managed service:
 
 ```text
 homelab-icmp-timestamp-block.service
 ```
 
-The unit idempotently enforces:
-
-```bash
-iptables -I INPUT 1 -p icmp --icmp-type timestamp-request -j DROP
-```
-
-Normal ICMP echo and SSH connectivity must continue to work.
+The service idempotently enforces an IPv4 ICMP timestamp-request DROP rule while preserving normal ping and SSH access.
 
 ---
 
 ## 3. Explicit non-goals
 
-This hardening role is intentionally narrow.
+This role does not:
 
-It does **not**:
-
-- enable the Proxmox firewall globally;
-- replace a general host firewall policy;
+- enable a global Proxmox/host firewall;
+- implement a complete CIS/STIG baseline;
 - disable TCP timestamps;
-- claim to implement a full CIS/STIG baseline;
-- alter unrelated SSH algorithms or authentication settings.
+- alter unrelated SSH authentication/algorithm policy;
+- replace Greenbone verification.
 
-TCP timestamps remain an accepted low-severity risk unless a separate approved control changes that decision.
+TCP timestamps remain a separately managed/accepted low-severity issue unless policy deliberately changes.
 
 ---
 
-## 4. VM commissioning prerequisites
+# Stage 0 - Preconditions
 
-Do not run hardening until the new guest has passed the basic IaC/guest acceptance gates:
+Do not run hardening until guest acceptance has passed:
 
-- VM exists because it is declared in OpenTofu;
-- Debian 13 has booted successfully;
-- cloud-init has completed;
+- VM exists through OpenTofu;
+- Debian 13 booted successfully;
+- cloud-init completed;
 - SSH public-key access works;
-- the approved hostname and network identity are known;
-- DNS and routing work;
+- hostname/network identity is approved;
+- DNS/routing work;
 - QEMU guest agent works where enabled;
-- no unexpected failed services are present.
+- no unexpected failed services exist.
 
-For VM101, add the approved address to a local Ansible inventory only after its network identity has been accepted.
+Keep a working administrative SSH session available during the first SSH-policy change.
 
-Do not commit passwords, private keys or temporary credential material.
-
----
-
-## 5. Pre-change checks
-
-Keep an existing administrative SSH session open during the first hardening run against a new host.
-
-On the guest, capture the current state:
+Capture pre-change state:
 
 ```bash
 sudo /usr/sbin/sshd -T | grep '^macs '
@@ -131,19 +107,19 @@ sudo /usr/sbin/iptables -S INPUT
 systemctl --failed
 ```
 
-From a separate trusted administration host, confirm fresh SSH access before proceeding.
-
 ---
 
-## 6. Inventory
+# Stage 1 - Inventory and connectivity
 
-Use the existing hardening inventory format under:
+Use the existing hardening inventory/playbook under:
 
 ```text
-ansible/linux-security-hardening/inventory.example.yml
+ansible/linux-security-hardening/
 ```
 
-For VM101, use the approved address rather than guessing an IP:
+For VM101 use the approved address rather than guessing one.
+
+Example shape:
 
 ```yaml
 all:
@@ -151,18 +127,14 @@ all:
     linux_security_hardening:
       hosts:
         app-platform-01:
-          ansible_host: <APPROVED_VM101_IP>
+          ansible_host: 192.168.2.253
           ansible_user: james
           ansible_become: true
 ```
 
-The real inventory may remain local until the permanent host inventory design is finalized. Secret material must not be committed.
+Do not commit passwords/private keys.
 
----
-
-## 7. Syntax and connectivity gates
-
-From `TestServer`:
+From TestServer:
 
 ```bash
 cd /home/james/projects/proxmox/ansible/linux-security-hardening
@@ -171,45 +143,38 @@ ansible-playbook -i inventory.yml playbook.yml --syntax-check
 ansible -i inventory.yml linux_security_hardening -m ping --limit app-platform-01
 ```
 
-If privilege escalation requires an interactive password, use the approved local invocation method rather than storing the password.
-
-Do not proceed if syntax checking or Ansible connectivity fails.
+Do not disable SSH host-key checking to bypass an identity mismatch.
 
 ---
 
-## 8. Apply hardening
+# Stage 2 - Apply
 
-Run against VM101 only for the first deployment:
+Run against the intended VM only during first commissioning:
 
 ```bash
-cd /home/james/projects/proxmox/ansible/linux-security-hardening
-
 ansible-playbook \
   -i inventory.yml \
   playbook.yml \
-  --limit app-platform-01 \
-  --ask-become-pass
+  --limit app-platform-01
 ```
 
-Omit `--ask-become-pass` only when privilege escalation is already configured securely.
-
-Do not run the role against a wider inventory until VM101 passes all post-change checks.
+If privilege escalation requires an interactive password, use the approved local invocation method rather than storing the password. VM101 currently has securely configured passwordless sudo for its Ansible commissioning path, so `--ask-become-pass` is not inherently required there.
 
 ---
 
-## 9. Post-change validation
+# Stage 3 - Fresh SSH validation
 
-### 9.1 Fresh SSH access
-
-From a separate trusted host:
+After the SSH policy change, establish a **new** SSH session:
 
 ```bash
-ssh james@<VM101_IP> 'hostname && echo SSH_PASS'
+ssh james@<VM_IP> 'hostname && echo SSH_PASS'
 ```
 
-A fresh SSH session is mandatory after changing SSH policy.
+A pre-existing session alone is not proof that new connections work.
 
-### 9.2 Effective SSH MAC policy
+---
+
+# Stage 4 - SSH MAC validation
 
 On the VM:
 
@@ -217,21 +182,23 @@ On the VM:
 sudo /usr/sbin/sshd -T | grep '^macs '
 ```
 
-The following must be absent:
+These must be absent:
 
 ```text
 umac-64-etm@openssh.com
 umac-64@openssh.com
 ```
 
-Optionally validate remotely with:
+External verification where appropriate:
 
 ```bash
-nmap -Pn --script ssh2-enum-algos -p 22 <VM101_IP> \
+nmap -Pn --script ssh2-enum-algos -p 22 <VM_IP> \
   | sed -n '/mac_algorithms:/,/compression_algorithms:/p'
 ```
 
-### 9.3 ICMP timestamp block
+---
+
+# Stage 5 - ICMP timestamp validation
 
 On the VM:
 
@@ -245,35 +212,29 @@ systemctl is-enabled homelab-icmp-timestamp-block.service
 systemctl is-active homelab-icmp-timestamp-block.service
 ```
 
-From a trusted scanner/admin host:
+From a trusted scanner/admin host, run the established ICMP timestamp probe and confirm no timestamp reply is returned.
+
+Normal connectivity must still pass:
 
 ```bash
-sudo nmap -sn -PP --send-ip --reason <VM101_IP>
-```
-
-The host must not report a timestamp reply.
-
-Normal connectivity must still succeed:
-
-```bash
-ping -c 3 <VM101_IP>
-ssh james@<VM101_IP> 'hostname && echo PASS'
+ping -c 3 <VM_IP>
+ssh james@<VM_IP> 'hostname && echo PASS'
 ```
 
 ---
 
-## 10. Idempotence gate
+# Stage 6 - Idempotence
 
-Run the Ansible playbook a second time against VM101.
+Run the hardening playbook a second time.
 
-Expected result:
+Expected:
 
-- no duplicate ICMP DROP rule;
-- no unnecessary SSH configuration change;
+- no duplicate ICMP rule;
+- no unnecessary SSH config change;
 - no failed tasks;
-- connectivity remains healthy.
+- fresh SSH still works.
 
-Confirm only one matching timestamp rule exists:
+Check matching ICMP rule count/content:
 
 ```bash
 sudo /usr/sbin/iptables -S INPUT \
@@ -282,24 +243,45 @@ sudo /usr/sbin/iptables -S INPUT \
 
 ---
 
-## 11. Security scan closure
+# Stage 7 - Security scan closure
 
-After local validation, re-run the relevant Greenbone checks against the VM.
+Re-run the relevant Greenbone checks.
 
-The gate passes when:
+The security gate closes when:
 
-- the weak UMAC-64 findings are absent;
-- the Linux ICMP timestamp-request finding is absent;
-- fresh SSH access still works;
-- normal ping still works;
-- the Ansible role is idempotent;
-- any remaining TCP timestamp finding is documented as the existing accepted risk unless policy changes.
+- weak UMAC-64 findings are absent;
+- ICMP timestamp finding is absent;
+- fresh SSH works;
+- normal ping works;
+- role is idempotent;
+- remaining accepted risks are documented.
 
 ---
 
-## 12. Rollback
+# Stage 8 - Handover to observability
 
-### SSH hardening rollback
+After hardening passes, the **next** runbook is:
+
+```text
+runbooks/linux-vm-observability-bootstrap.md
+```
+
+Do not install PostgreSQL, TimescaleDB or Nginx until the observability gate is also closed.
+
+The current new-VM observability standard is:
+
+```text
+Grafana Alloy
+ -> metrics -> ids-01 Prometheus 192.168.2.242:9090
+ -> logs    -> ids-01 Loki       192.168.2.242:3100
+ -> Grafana on ids-01
+```
+
+---
+
+# Rollback
+
+## SSH hardening
 
 ```bash
 sudo rm -f /etc/ssh/sshd_config.d/90-homelab-macs.conf
@@ -307,7 +289,7 @@ sudo /usr/sbin/sshd -t
 sudo systemctl reload ssh
 ```
 
-### ICMP timestamp rollback
+## ICMP timestamp control
 
 ```bash
 sudo systemctl disable --now homelab-icmp-timestamp-block.service
@@ -315,37 +297,37 @@ sudo rm -f /etc/systemd/system/homelab-icmp-timestamp-block.service
 sudo systemctl daemon-reload
 ```
 
-The service's stop action removes its matching ICMP timestamp DROP rule.
+After rollback, revalidate SSH/network behavior and update Git/Ansible so the source of truth matches the recovered state.
 
 ---
 
-## 13. Acceptance criteria
+## Acceptance checklist
 
-Security hardening is complete when:
-
-- [ ] VM guest commissioning has already passed.
+- [ ] Guest commissioning already passed.
 - [ ] Ansible syntax check passes.
-- [ ] Ansible can reach the VM.
-- [ ] Hardening playbook completes successfully against only the intended VM.
-- [ ] Fresh SSH login succeeds after the change.
-- [ ] `umac-64-etm@openssh.com` is not offered.
-- [ ] `umac-64@openssh.com` is not offered.
-- [ ] ICMP timestamp requests receive no reply.
+- [ ] Ansible connectivity passes.
+- [ ] Hardening playbook completes against only intended VM.
+- [ ] Fresh SSH succeeds after change.
+- [ ] UMAC-64 algorithms absent.
+- [ ] ICMP timestamp requests blocked.
 - [ ] Normal ping remains functional.
-- [ ] `homelab-icmp-timestamp-block.service` is enabled and active.
+- [ ] ICMP timestamp service enabled/active.
 - [ ] Second Ansible run is idempotent.
-- [ ] Matching Greenbone findings are cleared or formally documented.
+- [ ] Matching security findings cleared/documented.
+- [ ] Next stage explicitly set to observability, not PostgreSQL.
 
-Only after this gate passes should the application build continue to PostgreSQL, TimescaleDB and Nginx.
+---
 
-## 14. Source implementation
+## VM101 status
 
-The authoritative implementation remains:
+As of 2026-09-01:
 
 ```text
-ansible/linux-security-hardening/README.md
-ansible/linux-security-hardening/playbook.yml
-ansible/linux-security-hardening/roles/linux-security-hardening/
+VM101 security hardening: PASS
+UMAC-64 removal:          PASS
+ICMP timestamp block:     PASS
+Fresh SSH:                PASS
+Idempotence:              PASS
 ```
 
-This runbook defines where that validated role sits in the standard VM build lifecycle; it does not duplicate or broaden the role's implementation.
+VM101 has already moved into the observability stage; database installation remains gated until observability closure.
