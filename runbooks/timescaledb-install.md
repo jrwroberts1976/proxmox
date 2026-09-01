@@ -13,17 +13,25 @@ ansible/roles/timescaledb/
 
 The repository currently targets TimescaleDB on PostgreSQL 17 and Debian 13.
 
-This is runbook 3 in the platform sequence:
+The required platform sequence is:
 
 ```text
-Linux VM IaC -> PostgreSQL -> TimescaleDB -> Nginx
+Linux VM IaC
+  -> guest acceptance
+  -> Linux security hardening
+  -> Alloy observability acceptance
+  -> PostgreSQL
+  -> TimescaleDB
+  -> Nginx
 ```
+
+TimescaleDB inherits the already accepted security and observability baseline; it must not regress either one.
 
 ---
 
 ## 2. Preconditions
 
-The PostgreSQL installation runbook must already have passed.
+The PostgreSQL installation runbook must already have passed, and the VM's prior observability gate must remain healthy.
 
 Required:
 
@@ -32,7 +40,10 @@ Required:
 - the intended PostgreSQL major version is known;
 - target databases are declared in Ansible;
 - Ansible can connect to the host;
-- no unexpected failed services exist.
+- no unexpected failed services exist;
+- Alloy remains enabled/active/healthy;
+- host metrics remain visible in authoritative Prometheus on `ids-01`;
+- journal logs remain visible in authoritative Loki on `ids-01`.
 
 Verify:
 
@@ -40,7 +51,10 @@ Verify:
 cd ansible
 ansible timescaledb_servers -m ping
 ansible <DB_HOST> -m shell -a 'pg_isready -h 127.0.0.1 -p 5432'
+ansible <DB_HOST> -b -m shell -a 'systemctl is-active alloy && curl -fsS http://127.0.0.1:12345/-/healthy && systemctl --failed --no-legend'
 ```
+
+Stop if the VM baseline has regressed.
 
 ---
 
@@ -72,7 +86,7 @@ The role:
 
 ## 4. Inventory
 
-The same VM may belong to both groups:
+The same VM may belong to multiple groups:
 
 ```yaml
 all:
@@ -85,6 +99,8 @@ all:
       hosts:
         db-01:
 ```
+
+It should also remain under the Alloy management model established during the observability gate.
 
 Validate:
 
@@ -159,6 +175,8 @@ ansible-playbook playbooks/timescaledb.yml \
 ```
 
 Review the proposed repository, package, and PostgreSQL configuration changes.
+
+Package/repository actions can have check-mode limitations; use check mode as a preview rather than proof of runtime package availability.
 
 ---
 
@@ -289,7 +307,7 @@ sudo -u postgres psql -d <DATABASE> -c 'DROP TABLE runbook_metrics;'
 
 ## 16. Do not enable automatic tuning yet
 
-Current initial VM sizing is deliberately modest while the Proxmox host still has 8 GB RAM.
+Current initial VM sizing is deliberately modest while the Proxmox host remains memory constrained.
 
 Keep:
 
@@ -323,18 +341,43 @@ Investigate repeated changes before continuing.
 
 ---
 
-# Stage 9 - Upgrade discipline
+# Stage 9 - Observability regression check
+
+TimescaleDB installation can restart PostgreSQL, so re-check both database health and the pre-existing host telemetry afterward.
+
+```bash
+systemctl is-active postgresql
+pg_isready -h 127.0.0.1 -p 5432
+systemctl is-active alloy
+curl -fsS http://127.0.0.1:12345/-/healthy
+systemctl --failed --no-legend
+```
+
+Centrally confirm:
+
+```promql
+node_uname_info{hostname="<HOSTNAME>"}
+```
+
+Generate a unique journal marker if required to prove Loki flow after the PostgreSQL restart/change window.
+
+TimescaleDB/PostgreSQL application metrics can be added later through a dedicated exporter/integration, but host metrics/logging must remain continuously healthy.
+
+---
+
+# Stage 10 - Upgrade discipline
 
 ## 18. Patch/minor updates
 
 Before updating TimescaleDB:
 
-1. review the TimescaleDB release notes;
+1. review TimescaleDB release notes;
 2. confirm support for the installed PostgreSQL major version;
 3. take/verify the required backup;
 4. apply to a disposable/test environment first;
 5. run extension upgrade if required;
-6. validate hypertables and application queries.
+6. validate hypertables and application queries;
+7. confirm Alloy and central telemetry remain healthy.
 
 Check installed and available versions:
 
@@ -347,7 +390,7 @@ Do not blindly run database extension upgrades across important databases.
 
 ---
 
-# Stage 10 - Rollback
+# Stage 11 - Rollback
 
 ## 19. Configuration failure
 
@@ -366,12 +409,15 @@ Do not remove the TimescaleDB package from a database that contains TimescaleDB-
 
 For the first disposable proof, destroying/rebuilding the entire VM through IaC is preferred to attempting an in-place destructive rollback.
 
+After recovery, re-check Alloy and central telemetry.
+
 ---
 
 ## 21. Acceptance criteria
 
 TimescaleDB installation is complete when:
 
+- [ ] VM security/observability baseline was already accepted.
 - [ ] PostgreSQL runbook has passed.
 - [ ] Matching TimescaleDB package is available for Debian/PostgreSQL versions in use.
 - [ ] Ansible syntax check passes.
@@ -383,5 +429,6 @@ TimescaleDB installation is complete when:
 - [ ] Test table is removed afterward.
 - [ ] `timescaledb-tune` remains disabled unless deliberately approved.
 - [ ] Second Ansible run is idempotent.
+- [ ] Alloy remains healthy and host metrics/logs remain visible after installation.
 
 Then proceed to `runbooks/nginx-install.md`.
