@@ -4,7 +4,7 @@
 
 This runbook defines the mandatory observability commissioning gate for new Debian-family Proxmox VMs.
 
-A VM is not ready for PostgreSQL, TimescaleDB, Nginx or other application services until metrics and logs are visible centrally, duplicate collection has been excluded, dashboard-source data is proven, alerting is defined, and reboot persistence has been tested.
+A VM is not ready for PostgreSQL, TimescaleDB, Nginx or other application services until metrics and logs are visible centrally, duplicate collection has been excluded, the existing Grafana Linux dashboard can select the host, alerting is defined, and reboot persistence has been tested.
 
 Preferred architecture:
 
@@ -14,6 +14,11 @@ New Linux VM
    +--> Grafana Alloy
           |
           +--> prometheus.exporter.unix
+          |        |
+          |        +--> discovery.relabel
+          |        |        +--> hostname=<stable name>
+          |        |        +--> host=<stable name>
+          |        |        +--> job=linux-hosts
           |        |
           |        +--> prometheus.scrape
           |                 |
@@ -54,8 +59,6 @@ http://loki:3100
 ```
 
 Those Docker service names are valid inside the monitoring Docker network. A remote systemd Alloy service must use the LAN endpoints.
-
-### Authority rule
 
 The homelab contains more than one Prometheus deployment. Verify Grafana's datasource before selecting a Prometheus endpoint. Current new-VM authority is `ids-01`, not TestServer.
 
@@ -101,12 +104,7 @@ timedatectl
 systemctl --failed
 ```
 
-Expected:
-
-- correct host identity;
-- expected network path;
-- time sync healthy;
-- no unexpected failed units.
+Expected: correct host identity, expected network path, healthy time sync, and no unexpected failed units.
 
 ---
 
@@ -119,7 +117,7 @@ curl -fsS http://192.168.2.242:9090/-/ready
 curl -fsS http://192.168.2.242:3100/ready
 ```
 
-Prometheus must also be running with:
+Prometheus must also run with:
 
 ```text
 --web.enable-remote-write-receiver
@@ -167,7 +165,7 @@ ansible-playbook \
 
 ### First-install check-mode rule
 
-Repository/key changes are only simulated in check mode, so APT cannot see the new Alloy package in that same dry run. The role deliberately reports the intended package install and ends the host before package-dependent tasks.
+Repository/key changes are only simulated in check mode, so APT cannot see the new Alloy package in that same dry run. The role reports the intended package install and ends the host before package-dependent tasks.
 
 Expected:
 
@@ -176,7 +174,7 @@ failed=0
 CHECK MODE: Grafana Alloy would be installed after the Grafana APT repository is applied.
 ```
 
-Ansible `uri` checks may also be skipped in check mode. Keep the explicit central `curl` preflight above.
+Ansible `uri` checks may be skipped in check mode. Keep the explicit central `curl` preflight above.
 
 ---
 
@@ -197,12 +195,13 @@ The role must:
 3. grant journal-readable group access;
 4. render `/etc/default/alloy`;
 5. render `/etc/alloy/config.alloy`;
-6. run `alloy validate` before restart;
-7. enable/start the service;
-8. check readiness and health;
-9. prove journal access as the `alloy` account.
+6. normalize Linux metric labels for the established Grafana contract;
+7. run `alloy validate` before restart;
+8. enable/start the service;
+9. check readiness and health;
+10. prove journal access as the `alloy` account.
 
-Run the playbook again after a successful first apply. Expected second run:
+Run the playbook again after a successful apply. Expected second run:
 
 ```text
 changed=0
@@ -240,11 +239,11 @@ Use:
 runuser -u alloy -- journalctl -n 5 --no-pager
 ```
 
-The current role deliberately avoids Ansible `become_user: alloy` for this validation because VM101 exposed an Ansible temporary-file ACL/chmod incompatibility during privilege switching. `runuser` verifies the same service-account access without that unrelated dependency.
+The role deliberately avoids Ansible `become_user: alloy` for this validation because VM101 exposed an Ansible temporary-file ACL/chmod incompatibility during privilege switching. `runuser` verifies the real service-account access without that unrelated dependency.
 
 ---
 
-# Stage 5 - Managed Alloy pipeline
+# Stage 5 - Managed Alloy pipeline and labels
 
 Metrics path:
 
@@ -264,10 +263,12 @@ loki.source.journal
  -> http://192.168.2.242:3100/loki/api/v1/push
 ```
 
-Required stable labels:
+Required Linux metric labels:
 
 ```text
-hostname=<HOSTNAME>
+hostname=<HOSTNAME>    # canonical identity
+host=<HOSTNAME>        # existing Grafana compatibility
+job=linux-hosts        # existing Grafana compatibility
 role=<ROLE>
 environment=homelab
 ```
@@ -278,13 +279,19 @@ Do not deploy a separate node_exporter on the same new VM.
 
 # Stage 6 - Metrics end-to-end proof
 
-Query authoritative Prometheus:
+Canonical query:
 
 ```promql
 node_uname_info{hostname="<HOSTNAME>"}
 ```
 
-Expected: exactly one host series.
+Dashboard-compatible query:
+
+```promql
+node_uname_info{job="linux-hosts",host="<HOSTNAME>"}
+```
+
+Expected: one current host series from each selector, representing the same Alloy path.
 
 Core queries:
 
@@ -299,7 +306,9 @@ node_filesystem_size_bytes{hostname="<HOSTNAME>"}
 
 An Alloy remote-written host does not become a normal Prometheus scrape target. Do not use `/api/v1/targets` alone to decide whether the host is monitored.
 
-For VM101 the validated series labels are:
+### VM101 migration note
+
+Before the Grafana label-compatibility correction, VM101 was observed as:
 
 ```text
 hostname=app-platform-01
@@ -309,25 +318,33 @@ role=application
 environment=homelab
 ```
 
+That proved remote-write ingestion but did not satisfy the existing Linux dashboard selector because the dashboard requires `job="linux-hosts"` and the `host` label.
+
+After applying the corrected role, verify current labels include:
+
+```text
+hostname=app-platform-01
+host=app-platform-01
+job=linux-hosts
+role=application
+environment=homelab
+```
+
 ---
 
 # Stage 7 - Duplicate metrics gate
 
 ```promql
-count by (hostname, instance, job) (
+count by (hostname, host, instance, job) (
   node_uname_info{hostname="<HOSTNAME>"}
 )
 ```
 
-Expected for a normal new VM: one authoritative path.
+Expected for a normal new VM: one current authoritative path.
 
-VM101 validated result:
+Historical samples from an earlier label set may remain queryable for their retention window. Use instant queries/current timestamps before interpreting them as an active duplicate collector.
 
-```text
-app-platform-01  app-platform-01  integrations/unix  1
-```
-
-Investigate direct node_exporter, multiple Alloy instances or stale labels if more than one path appears.
+Investigate direct node_exporter, multiple Alloy instances or stale migration paths if more than one current path appears.
 
 ---
 
@@ -360,61 +377,62 @@ service_name=loki.source.journal.system
 source=journal
 ```
 
-Do not hard-code dashboards/queries around the older assumption `job="systemd-journal"`; inspect actual labels from the running Alloy version.
+Do not hard-code dashboards/queries around an assumed `job="systemd-journal"`; inspect actual labels from the running Alloy version.
 
 An Ansible shell invocation containing the same unique ID may itself be journalled and returned by the Loki query. That does not automatically indicate duplicate log shipping.
 
 ---
 
-# Stage 9 - Grafana data acceptance
+# Stage 9 - Grafana dashboard acceptance
 
-Current provisioned dashboards on `ids-01` that contain Linux/node metrics include:
+The provisioned dashboard inspected on `ids-01` is:
 
 ```text
-/home/james/docker/data/monitoring/grafana/dashboards/homelab-noc2.json
-/home/james/docker/data/monitoring/grafana/dashboards/homelab-noc.json
 /home/james/docker/data/monitoring/grafana/dashboards/linux-os-monitoring.json
 ```
 
-Before editing a dashboard, prove source data:
+Dashboard identity:
 
-```promql
-node_uname_info{hostname="<HOSTNAME>"}
+```text
+title=Linux OS Monitoring
+uid=linux-os-monitoring
 ```
 
-```promql
-100 * (
-  1 - avg by (hostname) (
-    rate(node_cpu_seconds_total{hostname="<HOSTNAME>",mode="idle"}[5m])
-  )
-)
+Its host variable is:
+
+```text
+label_values(up{job="linux-hosts"}, host)
 ```
 
-```promql
-node_memory_MemTotal_bytes{hostname="<HOSTNAME>"}
-```
+Its core panels use the same contract, for example:
 
 ```promql
-node_filesystem_size_bytes{hostname="<HOSTNAME>"}
+up{job="linux-hosts",host=~"$host"}
+node_uname_info{job="linux-hosts",host=~"$host"}
+node_memory_MemTotal_bytes{job="linux-hosts",host=~"$host"}
+node_filesystem_size_bytes{job="linux-hosts",host=~"$host"}
 ```
 
-VM101 passed all of these queries on 2026-09-01 and is present in the `hostname` label source.
+Therefore Prometheus data under only `hostname=<HOSTNAME>` and `job=integrations/unix` is **not** enough to close this dashboard gate.
 
-Do not force dashboard variables to depend on `job="node"`; Alloy currently produces `job=integrations/unix` for VM101 metrics.
+After the corrected Alloy role is applied, prove:
+
+```promql
+up{job="linux-hosts",host="<HOSTNAME>"}
+node_uname_info{job="linux-hosts",host="<HOSTNAME>"}
+node_memory_MemTotal_bytes{job="linux-hosts",host="<HOSTNAME>"}
+node_filesystem_size_bytes{job="linux-hosts",host="<HOSTNAME>"}
+```
+
+Then confirm the VM appears in the `Linux host` selector and core panels populate.
 
 ---
 
 # Stage 10 - Alerting
 
-A central scrape-style host-down rule such as:
+Because Alloy performs the local scrape and remote-writes the samples, a central Prometheus scrape-target state does not exist for the VM even though an `up` metric is forwarded.
 
-```promql
-up{job="node"} == 0
-```
-
-is not appropriate for a remote-written Alloy host.
-
-Use an absence-based host signal, for example:
+For robust host-loss alerting, prefer an absence-based host signal:
 
 ```promql
 absent_over_time(
@@ -454,7 +472,7 @@ curl -fsS http://127.0.0.1:12345/-/healthy
 
 Then:
 
-1. re-query `node_uname_info` centrally;
+1. re-query canonical and dashboard-compatible metrics centrally;
 2. generate another unique journal event;
 3. prove it reaches Loki;
 4. confirm no new failed units.
@@ -464,8 +482,6 @@ A configuration that only works until reboot does not pass commissioning.
 ---
 
 # Acceptance gate
-
-A new VM is observability-ready only when:
 
 ### Platform
 
@@ -487,9 +503,10 @@ A new VM is observability-ready only when:
 
 ### Metrics
 
-- [ ] `node_uname_info` visible.
+- [ ] `node_uname_info{hostname="<HOSTNAME>"}` visible.
+- [ ] `host=<HOSTNAME>` present.
+- [ ] `job=linux-hosts` present.
 - [ ] CPU/memory/filesystem metrics visible.
-- [ ] Stable labels present.
 - [ ] Duplicate path check passes.
 
 ### Logs
@@ -499,9 +516,8 @@ A new VM is observability-ready only when:
 
 ### Grafana
 
-- [ ] Host appears in hostname data source.
-- [ ] Core dashboard-source queries return data.
-- [ ] Dashboard itself is usable for the host.
+- [ ] `Linux OS Monitoring` host selector contains VM.
+- [ ] Core dashboard panels populate.
 
 ### Operations
 
@@ -542,16 +558,18 @@ Completed:
 - [x] Readiness and health pass.
 - [x] Journal access as `alloy` passes.
 - [x] Second Ansible apply: `changed=0`, `failed=0`.
-- [x] `node_uname_info` visible centrally as one series.
+- [x] Canonical `node_uname_info` visible centrally as one series.
 - [x] CPU, memory, boot-time and filesystem metrics visible.
-- [x] Duplicate metrics path check passes.
+- [x] Pre-correction duplicate metrics path check passed.
 - [x] Unique journal event visible in Loki.
-- [x] Grafana dashboard-source PromQL queries return data.
-- [x] Hostname label source includes `app-platform-01`.
+- [x] Grafana datasource and dashboard files verified on `ids-01`.
+- [x] `Linux OS Monitoring` variable/panel label contract inspected.
 
 Outstanding before observability closure:
 
-- [ ] Confirm actual Grafana dashboard presentation/selector behaviour if required.
+- [ ] Apply corrected Alloy label normalization (`host` and `job=linux-hosts`).
+- [ ] Prove `app-platform-01` appears in the `Linux host` dashboard selector.
+- [ ] Prove core dashboard panels populate using the established selector.
 - [ ] Implement/validate alert coverage.
 - [ ] Reboot VM101 and repeat metrics/log persistence proof.
 
@@ -582,8 +600,9 @@ Loki destination:
 Alloy deploy: PASS / FAIL
 Idempotence: PASS / FAIL
 Metrics E2E: PASS / FAIL
+Dashboard label compatibility: PASS / FAIL
 Logs E2E: PASS / FAIL
-Grafana data: PASS / FAIL
+Grafana dashboard: PASS / FAIL
 Duplicate check: PASS / FAIL
 Alert coverage: PASS / FAIL
 Reboot persistence: PASS / FAIL
