@@ -72,22 +72,28 @@
     mode: "0644"
   register: alloy_repository
 
+# During a first-install dry run the repository/key changes above are only
+# simulated. APT therefore cannot yet see the Alloy package and attempting the
+# package task would incorrectly fail with "No package matching 'alloy'".
+# Report the intended package action and stop before package-dependent tasks.
+- name: Report first-install dry-run package action
+  ansible.builtin.debug:
+    msg: "CHECK MODE: Grafana Alloy would be installed after the Grafana APT repository is applied."
+  when:
+    - ansible_check_mode
+    - "'alloy' not in ansible_facts.packages"
+
+- name: End first-install dry run before Alloy package installation
+  ansible.builtin.meta: end_host
+  when:
+    - ansible_check_mode
+    - "'alloy' not in ansible_facts.packages"
+
 - name: Install Grafana Alloy
   ansible.builtin.apt:
     name: "{{ alloy_package_name }}"
     state: present
     update_cache: true
-
-# On a first installation, Ansible check mode correctly predicts the package
-# change but does not create the package-provided alloy user, group, directories
-# or binary. End the host here so a dry run remains useful instead of failing on
-# resources that can only exist after the real package installation. Once Alloy
-# is installed, later --check --diff runs continue through the full role.
-- name: End first-install dry run before package-dependent configuration
-  ansible.builtin.meta: end_host
-  when:
-    - ansible_check_mode
-    - "'alloy' not in ansible_facts.packages"
 
 - name: Add Alloy service account to journal-readable groups
   ansible.builtin.user:
