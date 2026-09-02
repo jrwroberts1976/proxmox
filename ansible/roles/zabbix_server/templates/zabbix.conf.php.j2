@@ -1,0 +1,14 @@
+<?php
+// Managed by Ansible. Do not edit manually.
+
+$DB['TYPE'] = 'POSTGRESQL';
+$DB['SERVER'] = '{{ zabbix_server_db_host }}';
+$DB['PORT'] = '{{ zabbix_server_db_port }}';
+$DB['DATABASE'] = '{{ zabbix_server_db_name }}';
+$DB['USER'] = '{{ zabbix_server_db_user }}';
+$DB['PASSWORD'] = base64_decode('{{ zabbix_server_db_password | b64encode }}');
+$DB['SCHEMA'] = '';
+
+$ZBX_SERVER = 'localhost';
+$ZBX_SERVER_PORT = '10051';
+$ZBX_SERVER_NAME = '';
