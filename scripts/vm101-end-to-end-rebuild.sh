@@ -335,7 +335,6 @@ echo "===== PROXMOX PREREQUISITE GATE ====="
     command -v qm >/dev/null &&
     command -v vzdump >/dev/null &&
     command -v zstd >/dev/null &&
-    qm status '$VMID' >/dev/null &&
     qm config '$TEMPLATE_VMID' >/dev/null
 " || fail "Proxmox VM/template/backup prerequisite failed"
 
@@ -368,6 +367,35 @@ pass "OpenTofu init/fmt/validate"
 
 
 echo
+echo "===== BUILD MODE GATE ====="
+
+STATE_BEFORE="$(tofu state list)"
+
+if "${PVE_SSH[@]}" \
+     "qm status '$VMID'" \
+     >/dev/null 2>&1
+then
+    VM_EXISTS=1
+else
+    VM_EXISTS=0
+fi
+
+if [[ -z "$STATE_BEFORE" && "$VM_EXISTS" -eq 0 ]]; then
+    CREATE_ONLY=1
+    pass "clean-create mode: state empty and VM$VMID absent"
+
+elif [[ "$STATE_BEFORE" == "$RESOURCE" && "$VM_EXISTS" -eq 1 ]]; then
+    CREATE_ONLY=0
+    pass "rebuild mode: VM$VMID is consistently managed"
+
+else
+    echo "state=${STATE_BEFORE:-EMPTY}"
+    echo "proxmox_vm_exists=$VM_EXISTS"
+    fail "OpenTofu/Proxmox ownership state is inconsistent"
+fi
+
+
+echo
 echo "===== CURRENT DRIFT / TEMPLATE MIGRATION GATE ====="
 
 PREFLIGHT_PLAN="$WORK_ROOT/preflight.tfplan"
@@ -395,7 +423,15 @@ case "$PREFLIGHT_RC" in
     2)
         tofu show -json "$PREFLIGHT_PLAN" > "$PREFLIGHT_JSON"
 
-        if jq -e \
+        if [[ "$CREATE_ONLY" -eq 1 ]]; then
+
+            plan_action_gate \
+              "$PREFLIGHT_PLAN" \
+              "create"
+
+            pass "clean-create plan accepted"
+
+        elif jq -e \
           --arg resource "$RESOURCE" \
           --arg vm_name "$VM_NAME" '
             [
@@ -553,6 +589,8 @@ pass \
 
 
 echo
+if [[ "$CREATE_ONLY" -eq 0 ]]; then
+
 echo "===== FRESH VM101 BACKUP ====="
 
 BACKUP_RESULT="$(
@@ -662,6 +700,15 @@ then
 fi
 
 pass "VM101 absent from Proxmox"
+
+
+echo
+else
+
+    echo "===== EXISTING VM DESTRUCTION ====="
+    pass "clean-create mode: VM backup and destruction skipped"
+
+fi
 
 
 echo
@@ -802,18 +849,23 @@ for attempt in $(seq 1 24); do
         continue
     fi
 
-    NETWORK_HOSTKEY_COUNT="$(
+    NETWORK_HOSTKEY_FINGERPRINTS="$(
         printf '%s\n' "$NETWORK_HOSTKEY_LINE" |
+        ssh-keygen -lf - |
+        awk '{seen[$2]=1} END {for (fingerprint in seen) print fingerprint}'
+    )"
+
+    NETWORK_HOSTKEY_COUNT="$(
+        printf '%s\n' "$NETWORK_HOSTKEY_FINGERPRINTS" |
         awk 'NF {count++} END {print count+0}'
     )"
 
     [[ "$NETWORK_HOSTKEY_COUNT" -eq 1 ]] || \
-        fail "unexpected number of network ED25519 host keys: $NETWORK_HOSTKEY_COUNT"
+        fail "unexpected number of unique network ED25519 fingerprints: $NETWORK_HOSTKEY_COUNT"
 
     NETWORK_HOSTKEY_FINGERPRINT="$(
-        printf '%s\n' "$NETWORK_HOSTKEY_LINE" |
-        ssh-keygen -lf - |
-        awk 'NR == 1 {print $2}'
+        printf '%s\n' "$NETWORK_HOSTKEY_FINGERPRINTS" |
+        awk 'NR == 1 {print}'
     )"
 
     echo "qga_fingerprint=$QGA_HOSTKEY_FINGERPRINT"
