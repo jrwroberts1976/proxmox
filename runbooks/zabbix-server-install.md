@@ -1,112 +1,190 @@
 # Zabbix Server Installation Runbook
 
-## 1. Purpose
+## Purpose
 
-This runbook defines the controlled IaC deployment and validation procedure for Zabbix Server on the Debian 13 application platform VM.
+This runbook defines the controlled IaC build and validation path for the Debian 13 Zabbix Server platform.
 
-Implementation:
+Authoritative components:
 
 ```text
-ansible/playbooks/zabbix-server.yml
-ansible/roles/zabbix_server/
+OpenTofu:  tofu/
+Ansible:   ansible/playbooks/zabbix-server.yml
+Role:      ansible/roles/zabbix_server/
+Inventory: ansible/inventories/vm101/hosts.yml
 ```
 
-Current baseline:
+Current target identity:
 
 ```text
-Zabbix:      7.0 LTS
-Database:    PostgreSQL 17
-DB host:     localhost
-DB port:     5432
-Frontend:    Nginx + PHP-FPM
-HTTP port:   8080
-Agent:       Zabbix Agent 2
+VMID:      101
+Hostname:  zabbix-server-01
+IP:        192.168.2.253
+MAC:       BC:24:11:08:A2:33
+Template:  9001 debian-13-cloud-template-qga
+OS:        Debian 13 trixie
+vCPU:      2
+RAM:       4096 MB
+Disk:      64 GB
+Storage:   vm-ssd
 ```
 
-For VM101:
+The accepted build order is:
 
 ```text
-hostname: app-platform-01
-IP:       192.168.2.253
-VMID:     101
-```
-
-The required sequence is:
-
-```text
-Linux VM IaC
+OpenTofu VM create/recreate
+  -> QEMU Guest Agent identity gate
+  -> QGA-verified SSH host-key trust
+  -> SSH identity gate
   -> Linux security hardening
   -> unattended-upgrades
-  -> Alloy observability
+  -> Alloy
   -> PostgreSQL
   -> TimescaleDB
   -> Nginx
-  -> Zabbix Server
+  -> Zabbix Server + Agent 2 + frontend
+  -> live service/database/frontend validation
+  -> second Ansible pass requiring changed=0
+  -> final OpenTofu zero-drift gate
 ```
 
-Zabbix is the final application-platform service gate before the complete end-to-end rebuild is accepted.
+No manual package installation, database creation, schema import, Nginx edit, Zabbix edit, SSH trust bypass or plaintext secret entry is part of the accepted build.
 
 ---
 
-## 2. Preconditions
+## Current validated state - 2 September 2026
 
-Before running the Zabbix server role, all of the following must be GREEN:
+The clean-build path has now proved:
 
-- VM101 exists from OpenTofu and guest acceptance has passed;
-- SSH host identity has been independently verified;
-- Linux security hardening has passed;
-- unattended-upgrades has passed and is idempotent;
-- Alloy is enabled, active and exporting telemetry;
-- PostgreSQL 17 is enabled, active and accepting local connections;
-- TimescaleDB packages and preload configuration are installed;
-- Nginx is enabled, active and has valid configuration;
-- VM101 is present in the permanent `zabbix_servers` inventory group;
-- the Zabbix PostgreSQL role and database exist;
-- the Zabbix DB password is supplied only through encrypted Ansible Vault data.
+```text
+OpenTofu clean VM creation:            PASS
+VM name:                               zabbix-server-01
+QEMU Guest Agent:                      PASS
+Guest IP discovery:                    PASS (192.168.2.253)
+QGA ED25519 host-key fingerprint:      PASS
+Network ED25519 fingerprint match:     PASS
+Strict SSH with intended key only:     PASS
+Linux security hardening first pass:   PASS
+Unattended-upgrades first pass:        PASS
+```
 
-The PostgreSQL role manages Debian's `acl` package automatically. There is no manual `acl` installation step. `acl` provides `setfacl`, which Ansible requires when switching from the SSH user to `become_user: postgres` for PostgreSQL administration.
+Validated Ansible recaps:
+
+```text
+Linux security hardening:
+app-platform-01 : ok=15 changed=5 unreachable=0 failed=0
+
+Unattended upgrades:
+app-platform-01 : ok=8 changed=1 unreachable=0 failed=0
+```
+
+`app-platform-01` in these recaps is currently the Ansible inventory alias. The actual guest hostname is `zabbix-server-01`. Inventory naming should be aligned with the guest hostname before final closure.
+
+The remaining first-pass sequence is:
+
+```text
+Alloy
+PostgreSQL
+TimescaleDB
+Nginx
+Zabbix Server
+```
+
+followed by live validation, a complete `changed=0` second pass and final OpenTofu zero drift.
 
 ---
 
-## 3. Permanent inventory
+## Security findings that must remain automated
 
-VM101 uses:
+### 1. SSH host key must be verified through QGA
 
-```text
-ansible/inventories/vm101/hosts.yml
-```
+A freshly created VM generates a new SSH host key. Do not use `StrictHostKeyChecking=no` or permanently rely on `accept-new`.
 
-The host must be a member of:
+The accepted trust sequence is:
 
 ```text
-alloy_hosts
-unattended_upgrades
-linux_security_hardening
-postgresql_servers
-timescaledb_servers
-nginx_servers
-zabbix_servers
+QGA reads /etc/ssh/ssh_host_ed25519_key.pub
+  -> calculate trusted SHA256 fingerprint
+  -> ssh-keyscan retrieves network ED25519 key
+  -> reduce results to unique fingerprints
+  -> require exactly one unique network fingerprint
+  -> require exact QGA/network fingerprint match
+  -> write verified key to temporary known_hosts
+  -> use StrictHostKeyChecking=yes
 ```
 
-Validate:
+`ssh-keyscan` may return duplicate lines for the same ED25519 key. The gate must count **unique fingerprints**, not raw output lines.
+
+### 2. Controller must use the intended SSH identity only
+
+A direct strict SSH test proved the controller key and guest `authorized_keys` fingerprint match. To prevent an SSH agent offering unrelated identities first, automation must include:
+
+```text
+-o IdentitiesOnly=yes
+```
+
+Ansible SSH settings must include the same requirement together with the verified temporary `known_hosts` file and `StrictHostKeyChecking=yes`.
+
+### 3. Cloud-init account state
+
+The cloud-init-created `james` account reports password state `L`, while password authentication is disabled. Public-key authentication is valid and has been directly proved. Do not add or expose a password simply to clear the `L` state.
+
+The required account checks are:
+
+```text
+james account exists
+james is in sudo
+/home/james mode 0700
+/home/james/.ssh mode 0700
+authorized_keys mode 0600
+controller and authorized_keys fingerprints match
+sshd PubkeyAuthentication yes
+```
+
+---
+
+## Secrets
+
+The Zabbix database password is stored only in encrypted Ansible Vault data:
+
+```text
+ansible/inventories/vm101/group_vars/all/vault.yml
+```
+
+Non-secret references are in:
+
+```text
+ansible/inventories/vm101/group_vars/all/main.yml
+```
+
+The controller uses an external Vault password file:
+
+```text
+/home/james/.config/homelab-iac/ansible-vault-password
+```
+
+Required properties:
+
+```text
+owner: james
+mode:  0600
+```
+
+Validate decryption without printing the secret:
 
 ```bash
-cd /home/james/projects/proxmox/ansible
-ansible-inventory \
-  -i inventories/vm101/hosts.yml \
-  --graph \
-  --ask-vault-pass
+ansible-vault view \
+  --vault-password-file /home/james/.config/homelab-iac/ansible-vault-password \
+  ansible/inventories/vm101/group_vars/all/vault.yml \
+  >/dev/null
 ```
 
-Expected: `app-platform-01` appears under every required group.
+Never commit the Vault password file or decrypted secret.
 
 ---
 
-## 4. Secrets
+## PostgreSQL prerequisite
 
-The Zabbix database password must never appear in plaintext Git, shell history, terminal output or CI logs.
-
-VM101 uses a non-secret variable reference:
+The PostgreSQL role must create the Zabbix login/database before the Zabbix role imports the schema:
 
 ```yaml
 postgresql_users:
@@ -121,272 +199,149 @@ postgresql_databases:
 zabbix_server_db_password: "{{ vault_zabbix_db_password }}"
 ```
 
-Encrypted secret location:
+The PostgreSQL role also installs Debian package `acl` automatically. `setfacl` is required when Ansible connects as `james` and uses `become_user: postgres`.
 
-```text
-ansible/inventories/vm101/group_vars/all/vault.yml
-```
-
-Non-secret references:
-
-```text
-ansible/inventories/vm101/group_vars/all/main.yml
-```
-
-Validate only the vault header, never its encrypted body or decrypted value:
-
-```bash
-head -1 inventories/vm101/group_vars/all/vault.yml
-```
-
-Expected:
-
-```text
-$ANSIBLE_VAULT;1.1;AES256
-```
+Do not add a manual `apt install acl` step.
 
 ---
 
-# Stage 0 - PostgreSQL prerequisite gate
+## Zabbix server role behavior
 
-## 5. Apply PostgreSQL declarations
-
-The Zabbix role expects the `zabbix` PostgreSQL user/database to exist before schema bootstrap.
-
-```bash
-cd /home/james/projects/proxmox/ansible
-
-ansible-playbook \
-  -i inventories/vm101/hosts.yml \
-  playbooks/postgresql.yml \
-  --ask-vault-pass
-```
-
-The PostgreSQL role installs `acl` automatically before any `become_user: postgres` database-management tasks.
-
-### VM101 validation record - 2 September 2026
-
-After the `acl` dependency was added to the PostgreSQL role, the Zabbix database prerequisite run completed successfully:
+The `zabbix_server` role currently manages:
 
 ```text
-app-platform-01 : ok=9 changed=3 unreachable=0 failed=0 skipped=1
+Zabbix 7.0 LTS repository
+zabbix-server-pgsql
+zabbix-frontend-php
+zabbix-nginx-conf
+zabbix-sql-scripts
+zabbix-agent2
+postgresql-client
+PostgreSQL connection settings
+initial schema import when absent
+/etc/zabbix/web/zabbix.conf.php
+Nginx listener on 8080
+zabbix-server service
+zabbix-agent2 service
+nginx service
+php8.4-fpm service
 ```
 
-The earlier failure caused by missing `setfacl` is therefore fixed in IaC and must not be converted into a manual build step.
+The frontend configuration task is secret-bearing and must remain protected with `no_log: true`.
+
+The role must not re-import the schema when it already exists.
 
 ---
 
-## 6. Verify Zabbix database objects
+## First-pass Ansible sequence
 
-Do not display the password.
-
-```bash
-ssh james@192.168.2.253 '
-  sudo -u postgres psql -Atqc "SELECT rolname FROM pg_roles WHERE rolname='"'"'zabbix'"'"';"
-  sudo -u postgres psql -Atqc "SELECT datname || '"'"'|'"'"' || pg_catalog.pg_get_userbyid(datdba) FROM pg_database WHERE datname='"'"'zabbix'"'"';"
-'
-```
-
-Expected:
-
-```text
-zabbix
-zabbix|zabbix
-```
-
-Stop if either object is absent or the database owner is not `zabbix`.
-
----
-
-# Stage 1 - Static validation
-
-## 7. Syntax check
+Use the permanent VM inventory and external Vault password file.
 
 ```bash
 cd /home/james/projects/proxmox/ansible
 
-ansible-playbook \
-  -i inventories/vm101/hosts.yml \
-  playbooks/zabbix-server.yml \
-  --syntax-check \
-  --ask-vault-pass
+export ANSIBLE_HOST_KEY_CHECKING=True
+export ANSIBLE_SSH_COMMON_ARGS="-o IdentitiesOnly=yes -o UserKnownHostsFile=<verified-known-hosts> -o StrictHostKeyChecking=yes"
+export ANSIBLE_ROLES_PATH="/home/james/projects/proxmox/ansible/roles:/home/james/projects/proxmox/ansible/linux-security-hardening/roles"
 ```
 
-Expected: syntax check succeeds.
+Run in this order:
 
----
-
-## 8. Role behavior
-
-The Zabbix server role currently:
-
-1. verifies Debian 13+ and requires `zabbix_server_db_password`;
-2. installs the official Zabbix 7.0 repository package;
-3. installs:
-   - `zabbix-server-pgsql`;
-   - `zabbix-frontend-php`;
-   - `zabbix-nginx-conf`;
-   - `zabbix-sql-scripts`;
-   - `zabbix-agent2`;
-   - `postgresql-client`;
-4. configures the PostgreSQL connection in `/etc/zabbix/zabbix_server.conf`;
-5. checks whether the initial Zabbix schema already exists;
-6. imports `/usr/share/zabbix-sql-scripts/postgresql/server.sql.gz` only when the schema is absent;
-7. configures the packaged Zabbix Nginx listener on port `8080`;
-8. enables and starts Zabbix Server, Zabbix Agent 2, Nginx and PHP-FPM;
-9. reloads Nginx only when frontend configuration changes.
-
-The schema-existence check is the idempotence gate for initial database bootstrap.
-
----
-
-# Stage 2 - First Zabbix deployment
-
-## 9. Apply the playbook
-
-```bash
-cd /home/james/projects/proxmox/ansible
-
-ansible-playbook \
-  -i inventories/vm101/hosts.yml \
-  playbooks/zabbix-server.yml \
-  --ask-vault-pass
+```text
+linux-security-hardening/playbook.yml
+playbooks/unattended-upgrades.yml
+playbooks/alloy.yml
+playbooks/postgresql.yml
+playbooks/timescaledb.yml
+playbooks/nginx.yml
+playbooks/zabbix-server.yml
 ```
 
-Do not use `--diff` for secret-bearing Zabbix configuration unless the relevant tasks are confirmed safe. Database-password tasks use `no_log` and must remain protected.
-
-Required recap:
+Every first-pass recap must contain:
 
 ```text
 unreachable=0
 failed=0
 ```
 
----
-
-# Stage 3 - Service validation
-
-## 10. Validate service state
-
-```bash
-ssh james@192.168.2.253 '
-  echo "===== ZABBIX SERVER ====="
-  sudo systemctl is-enabled zabbix-server
-  sudo systemctl is-active zabbix-server
-
-  echo
-  echo "===== ZABBIX AGENT 2 ====="
-  sudo systemctl is-enabled zabbix-agent2
-  sudo systemctl is-active zabbix-agent2
-
-  echo
-  echo "===== NGINX ====="
-  sudo systemctl is-enabled nginx
-  sudo systemctl is-active nginx
-
-  echo
-  echo "===== PHP-FPM ====="
-  sudo systemctl is-enabled php8.4-fpm
-  sudo systemctl is-active php8.4-fpm
-'
-```
-
-Expected: every service is `enabled` and `active`.
+A non-zero `changed` count is expected on the first build.
 
 ---
 
-## 11. Validate processes and listeners
+## Live validation
 
-```bash
-ssh james@192.168.2.253 '
-  echo "===== LISTENERS ====="
-  sudo ss -ltnp | grep -E ":(8080|10051|10050) " || true
-'
-```
+### Services
 
-Expected baseline:
-
-- TCP 8080: Zabbix frontend via Nginx;
-- TCP 10051: Zabbix server trapper/listener where enabled by the packaged configuration;
-- TCP 10050: Zabbix Agent 2.
-
-Investigate any missing expected listener before continuing.
-
----
-
-## 12. Validate Zabbix server database connection
-
-```bash
-ssh james@192.168.2.253 '
-  sudo journalctl -u zabbix-server -n 80 --no-pager
-'
-```
-
-Required outcome: no authentication, missing-schema, connection-refused or fatal startup errors.
-
-Do not expose `DBPassword` while troubleshooting.
-
----
-
-# Stage 4 - Schema validation
-
-## 13. Confirm schema exists
-
-```bash
-ssh james@192.168.2.253 '
-  sudo -u postgres psql -d zabbix -Atqc "SELECT to_regclass('"'"'public.users'"'"') IS NOT NULL;"
-'
-```
-
-Expected:
+Required active services:
 
 ```text
-t
+postgresql
+alloy
+nginx
+php8.4-fpm
+zabbix-server
+zabbix-agent2
 ```
 
-The initial standard PostgreSQL schema is imported automatically only when absent.
+### PostgreSQL
 
-### TimescaleDB note
+Required baseline:
 
-The current Zabbix role bootstraps the standard PostgreSQL schema. Zabbix-specific TimescaleDB schema conversion is a separate validation stage and must not be assumed complete merely because the TimescaleDB package is installed and preloaded.
-
----
-
-# Stage 5 - Frontend validation
-
-## 14. Validate Nginx configuration
-
-```bash
-ssh james@192.168.2.253 '
-  sudo nginx -t
-  curl -fsSI http://127.0.0.1:8080/ | head
-'
+```text
+PostgreSQL major version: 17
+listen_addresses: localhost
+Zabbix database: present
+Zabbix owner: zabbix
 ```
+
+### TimescaleDB
+
+Required foundational validation:
+
+```text
+TimescaleDB package installed
+shared_preload_libraries contains timescaledb
+TimescaleDB extension is available
+```
+
+This does **not** prove that the Zabbix database has been converted to TimescaleDB hypertables. Zabbix-specific TimescaleDB conversion remains a separate step until explicitly automated and validated.
+
+### Zabbix schema
 
 Required:
 
-- `nginx -t` succeeds;
-- the frontend returns an HTTP response;
-- no unexpected listener is exposed.
+```text
+public.users exists
+public table count is at least 200
+```
 
-External/LAN exposure should be deliberate and documented; do not broaden database access as part of frontend setup.
+### Listeners
+
+Required:
+
+```text
+8080   Zabbix frontend via Nginx
+10051  Zabbix Server
+10050  Zabbix Agent 2
+```
+
+### Frontend
+
+Required external result:
+
+```text
+HTTP 200 from http://192.168.2.253:8080/
+```
+
+The frontend must not redirect to `setup.php`; the Ansible-managed `/etc/zabbix/web/zabbix.conf.php` must already provide database configuration.
 
 ---
 
-# Stage 6 - Idempotence
+## Idempotence gate
 
-## 15. Run Zabbix playbook again
+Run the entire seven-stage Ansible chain again in the same order.
 
-```bash
-cd /home/james/projects/proxmox/ansible
-
-ansible-playbook \
-  -i inventories/vm101/hosts.yml \
-  playbooks/zabbix-server.yml \
-  --ask-vault-pass
-```
-
-Target:
+Every stage must end with:
 
 ```text
 changed=0
@@ -394,69 +349,76 @@ unreachable=0
 failed=0
 ```
 
-A second run must not re-import the database schema or repeatedly restart services without a configuration change.
+Any `changed>0` result in the second pass is an E2E failure until understood.
 
 ---
 
-# Stage 7 - Observability regression gate
+## Final OpenTofu gate
 
-## 16. Ensure existing telemetry still works
+After application commissioning:
 
 ```bash
-ssh james@192.168.2.253 '
-  systemctl is-active alloy
-  curl -fsS http://127.0.0.1:12345/-/healthy
-  systemctl --failed --no-legend
-'
+tofu plan -input=false -detailed-exitcode
 ```
 
-Then centrally verify VM101 metrics and journal logs remain visible in Prometheus/Loki.
-
----
-
-# Stage 8 - End-to-end rebuild acceptance
-
-After the standalone Zabbix role is GREEN and idempotent, integrate it into the VM101 end-to-end rebuild.
-
-The unattended rebuild sequence must prove:
+Required exit code:
 
 ```text
-OpenTofu destroy/recreate
-  -> QGA identity/SSH trust gate
-  -> base guest acceptance
-  -> Linux security hardening
-  -> unattended-upgrades
-  -> Alloy
-  -> PostgreSQL (including automatic acl dependency)
-  -> TimescaleDB
-  -> Nginx
-  -> Zabbix Server
-  -> service validation
-  -> second Ansible/idempotence pass
-  -> OpenTofu zero drift
+0
 ```
 
-No manual `apt install acl`, database creation, schema import, Nginx edit or Zabbix configuration edit is permitted in the accepted E2E path.
+No persistent Proxmox GUI correction is accepted as closure. Any intended persistent VM change belongs in OpenTofu.
 
 ---
 
-## Acceptance criteria
+## Clean-create safety model
 
-Zabbix Server is GREEN when:
+The one-button target workflow must distinguish two states:
 
-- [ ] permanent VM101 inventory includes `zabbix_servers`;
-- [ ] encrypted vault is used and no plaintext DB password is committed;
-- [ ] PostgreSQL `zabbix` role exists;
-- [ ] PostgreSQL `zabbix` database exists and is owned by `zabbix`;
-- [ ] PostgreSQL role installs `acl` automatically;
-- [ ] Zabbix 7.0 packages install successfully;
-- [ ] initial Zabbix schema exists;
-- [ ] Zabbix Server is enabled and active;
-- [ ] Zabbix Agent 2 is enabled and active;
-- [ ] Nginx and PHP-FPM are enabled and active;
-- [ ] `nginx -t` succeeds;
-- [ ] Zabbix frontend responds on the intended listener;
-- [ ] no Zabbix database startup errors are present;
-- [ ] second Zabbix Ansible run is `changed=0`;
-- [ ] Alloy/Prometheus/Loki telemetry remains healthy;
-- [ ] full destroy/rebuild can complete without manual package or service intervention.
+```text
+CLEAN CREATE
+OpenTofu state empty + VM101 absent
+  -> skip backup/destroy
+  -> require exactly one create
+
+MANAGED REBUILD
+OpenTofu state contains exactly app_platform + VM101 exists
+  -> backup/state gates
+  -> controlled destroy
+  -> exactly one recreate
+```
+
+Any inconsistent ownership state must fail closed.
+
+A clean-create workflow must never destroy an existing unmanaged VM101.
+
+---
+
+## Acceptance checklist
+
+Zabbix Server is complete only when all are true:
+
+- [ ] OpenTofu controls exactly the intended VM.
+- [ ] Debian 13 guest hostname is correct.
+- [ ] QEMU Guest Agent is healthy.
+- [ ] guest IP is obtained and validated.
+- [ ] QGA and network ED25519 fingerprints match.
+- [ ] SSH uses `StrictHostKeyChecking=yes`.
+- [ ] SSH/Ansible use `IdentitiesOnly=yes`.
+- [ ] Vault password remains external and mode 0600.
+- [ ] security hardening succeeds.
+- [ ] unattended-upgrades succeeds.
+- [ ] Alloy succeeds and telemetry remains available.
+- [ ] PostgreSQL 17 succeeds.
+- [ ] `acl` is installed automatically by the PostgreSQL role.
+- [ ] TimescaleDB package/preload validation succeeds.
+- [ ] Nginx configuration succeeds.
+- [ ] Zabbix Server 7.0 succeeds.
+- [ ] Zabbix Agent 2 succeeds.
+- [ ] standard PostgreSQL Zabbix schema exists.
+- [ ] frontend returns HTTP 200 without setup wizard redirect.
+- [ ] all required listeners exist.
+- [ ] complete second Ansible pass is `changed=0`.
+- [ ] final OpenTofu plan has zero drift.
+
+Only then is the one-button Zabbix Server build GREEN.
