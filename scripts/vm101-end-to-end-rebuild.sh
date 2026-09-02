@@ -899,7 +899,7 @@ for attempt in $(seq 1 24); do
         -o UserKnownHostsFile="$KNOWN_HOSTS" \
         -o StrictHostKeyChecking=yes \
         "james@$VM_IP" \
-        'test "$(hostname)" = "app-platform-01" &&
+        'test "$(hostname)" = "'"$VM_NAME"'" &&
          grep -q "VERSION_CODENAME=trixie" /etc/os-release' \
         >/dev/null 2>&1
     then
