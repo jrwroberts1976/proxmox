@@ -47,6 +47,7 @@
   register: unattended_upgrades_apt_config
   changed_when: false
   check_mode: false
+  when: not ansible_check_mode
 
 - name: Verify automatic reboot is disabled
   ansible.builtin.assert:
@@ -59,5 +60,6 @@
         in unattended_upgrades_apt_config.stdout
     fail_msg: Automatic unattended reboot is not safely disabled.
   when:
+    - not ansible_check_mode
     - not unattended_upgrades_automatic_reboot
     - not unattended_upgrades_automatic_reboot_with_users
