@@ -1,59 +1,46 @@
 # Linux VM IaC Deployment Runbook
 
-## 1. Purpose
+## Purpose
 
-This runbook defines the controlled procedure for deploying a new Debian Linux VM on the Proxmox platform using Infrastructure as Code.
+This runbook defines the controlled deployment of Debian 13 guests on Proxmox using OpenTofu, cloud-init and Ansible.
 
-The normal deployment chain is:
+The normal chain is:
 
 ```text
-1. OpenTofu VM creation
-        |
-2. cloud-init / guest acceptance
-        |
-3. Linux security hardening
-        |
-4. Alloy observability acceptance
-        |
-5. PostgreSQL
-        |
-6. TimescaleDB
-        |
-7. Nginx
+OpenTofu
+  -> cloud-init
+  -> QEMU Guest Agent
+  -> verified SSH trust
+  -> Linux security hardening
+  -> unattended-upgrades
+  -> Alloy
+  -> application roles
+  -> idempotence
+  -> OpenTofu zero drift
 ```
 
-Manual VM creation or persistent GUI-only corrections are not the normal path. Git/OpenTofu/Ansible are the source of truth.
-
-Security and observability are mandatory build gates, not optional follow-up work.
+Git/OpenTofu/Ansible are the source of truth. Manual Proxmox GUI corrections are not an accepted persistent build step.
 
 ---
 
-## 2. Current platform baseline
-
-Verified current Proxmox platform:
+## Current platform baseline
 
 ```text
-Proxmox host:      PROXMOX
-Management IP:     192.168.2.70
-Bridge:            vmbr0
-Preferred storage: vm-ssd
-Storage type:      LVM-thin
-Backing disk:      KINGSTON SA400S37480G
+Proxmox node:       PROXMOX
+Management IP:      192.168.2.70
+Bridge:             vmbr0
+VM storage:         vm-ssd
+Template VMID:      9001
+Template:           debian-13-cloud-template-qga
+Template OS:        Debian 13
+QEMU guest agent:   included/validated
 ```
 
-Current Debian template:
-
-```text
-VMID: 9000
-Name: debian-13-cloud-template
-OS: Debian 13 genericcloud
-```
-
-Current application-platform VM:
+Current VM101 build target:
 
 ```text
 VMID:       101
-Hostname:   app-platform-01
+Hostname:   zabbix-server-01
 IP:         192.168.2.253
 MAC:        BC:24:11:08:A2:33
 vCPU:       2
@@ -61,403 +48,370 @@ RAM:        4096 MB
 Disk:       64 GB
 Storage:    vm-ssd
 NIC:        VirtIO
-Guest agent: enabled/healthy
 ```
 
-VM101 currently uses DHCP. Reserve the address by MAC before treating it as a long-lived application/database endpoint rather than silently adding an unmanaged static address.
+VM101 currently receives its address by DHCP using the stable MAC identity.
 
 ---
 
-## 3. Design rules
+## Design rules
 
 1. Git is the source of truth.
-2. Use OpenTofu for VM lifecycle.
-3. Use cloud-init for first-boot identity/access only.
-4. Use Ansible for OS, security, observability and applications.
-5. Store guest disks on `vm-ssd` unless a documented exception exists.
-6. Never commit API tokens, private keys, passwords, state secrets or Vault passwords.
-7. Review a saved plan before apply.
-8. Do not make corrective persistent GUI changes after an IaC failure; fix code and re-plan.
-9. Security hardening must pass before observability/applications.
-10. Observability must fully pass before PostgreSQL/TimescaleDB/Nginx.
-11. A second Ansible run should prove idempotence for each managed layer.
-12. Destroy operations require explicit confirmation that the VM is disposable and contains no required data.
+2. OpenTofu owns VM lifecycle and persistent VM properties.
+3. cloud-init owns first-boot user/key/network bootstrap.
+4. Ansible owns operating-system and application configuration.
+5. Use template 9001 for Debian 13 guest-agent-enabled builds.
+6. Use `vm-ssd` unless a documented exception exists.
+7. Never commit provider tokens, private SSH keys, plaintext passwords or Vault password files.
+8. Review saved OpenTofu plans before apply.
+9. Fail closed on ownership inconsistencies or unrelated drift.
+10. Never disable SSH host-key checking to bypass a rebuild identity change.
+11. Security hardening precedes application deployment.
+12. A complete second Ansible pass must prove idempotence.
+13. Final OpenTofu plan must show zero drift.
 
 ---
 
-## 4. Required values
+## Build modes
 
-Record before creation:
+Automation must explicitly distinguish clean creation from a managed rebuild.
+
+### Clean create
 
 ```text
-VM_NAME=
-VM_ID=
-VM_IP=
-VM_PREFIX=24
-VM_GATEWAY=192.168.2.1
-VM_DNS=
-VM_CPU=2
-VM_MEMORY_MB=4096
-VM_DISK_GB=64
-VM_STORAGE=vm-ssd
-VM_BRIDGE=vmbr0
-TEMPLATE_VM_ID=9000
-PROXMOX_NODE=PROXMOX
-SSH_PUBLIC_KEY_FILE=
+OpenTofu state empty
+AND target VM absent from Proxmox
 ```
 
-Do not guess a VM ID or address. Confirm both are unused/approved before apply.
-
----
-
-# Stage 0 - Proxmox preflight
-
-On `PROXMOX`:
-
-```bash
-pvesm status
-pvesh get /nodes/PROXMOX/status
-qm list
-free -h
-lsblk
-```
-
-Required:
-
-- `vm-ssd` active;
-- sufficient RAM/storage;
-- chosen VMID unused;
-- source template present;
-- no storage errors.
-
-Template check:
-
-```bash
-qm config 9000
-```
-
-Future template builds should include `qemu-guest-agent` before conversion so new guests do not require a post-clone correction.
-
----
-
-# Stage 1 - OpenTofu source
-
-Current repository branch for VM101 work:
+Required behavior:
 
 ```text
-iac/app-platform-vm101
+skip existing-VM backup/destroy
+require exactly one OpenTofu create
 ```
 
-Use the repository's existing OpenTofu structure and `bpg/proxmox` provider implementation. Credentials must come from the approved environment/secret mechanism, not `.tf` source.
-
-Required declared properties include:
+### Managed rebuild
 
 ```text
-name
-vm_id
-node_name
-clone/template source
-cpu
-memory
-disk/storage
-bridge
-cloud-init network
-DNS
-cloud-init user
-SSH public key
-QEMU guest agent
-startup state
+OpenTofu state contains exactly the expected VM resource
+AND target VM exists in Proxmox
 ```
 
-Expose at least:
+Required behavior:
 
 ```text
-vm_id
-vm_name
-ipv4_address
+state backup
+VM backup where required
+controlled destroy plan
+exact destroy
+exact create
 ```
 
-for Ansible hand-off.
+### Inconsistent state
 
----
-
-# Stage 2 - Validate and plan
-
-From the environment directory:
-
-```bash
-tofu fmt -recursive
-tofu init
-tofu validate
-tofu plan -out=tfplan
-```
-
-Review:
-
-- exactly the intended VM;
-- correct template/VMID;
-- `vm-ssd` storage;
-- `vmbr0` network;
-- intended CPU/RAM/disk;
-- intended network/bootstrap values;
-- no unrelated destroy/replace;
-- no secret leakage.
-
-Stop if an unplanned destroy/replacement appears.
-
----
-
-# Stage 3 - Apply
-
-```bash
-tofu apply tfplan
-```
-
-On Proxmox:
-
-```bash
-qm list
-qm status <VM_ID>
-qm config <VM_ID>
-pvesm status
-```
-
-Confirm the disk is on `vm-ssd` and the VM is running as intended.
-
----
-
-# Stage 4 - Guest acceptance
-
-From the administration host:
-
-```bash
-ping -c 3 <VM_IP>
-ssh <ADMIN_USER>@<VM_IP>
-```
-
-Inside the VM:
-
-```bash
-hostnamectl
-ip -br addr
-ip route
-cat /etc/os-release
-uname -a
-timedatectl
-systemctl --failed
-cloud-init status --long
-```
-
-Required:
-
-- Debian 13 identity correct;
-- expected hostname/network;
-- default route correct;
-- DNS works;
-- cloud-init complete;
-- no unexpected failed services;
-- SSH key access works.
-
-Guest agent:
-
-```bash
-systemctl status qemu-guest-agent --no-pager
-```
-
-From Proxmox:
-
-```bash
-qm agent <VM_ID> ping
-```
-
----
-
-# Stage 5 - Ansible hand-off
-
-Do not add a guest to application groups until Stage 4 passes.
-
-The VM then enters the managed Ansible layers:
+Examples:
 
 ```text
-security hardening
-Alloy observability
-PostgreSQL
-TimescaleDB
-Nginx
+OpenTofu state empty but VM exists
+OpenTofu state populated but VM absent
+unexpected resource in state
 ```
 
-Validate controller connectivity before every new layer:
-
-```bash
-ansible <GROUP> -m ansible.builtin.ping --limit <VM_NAME>
-```
-
-Do not disable SSH host-key checking to bypass an identity problem.
+Required behavior: **FAIL**. Do not adopt, destroy or overwrite automatically.
 
 ---
 
-# Stage 6 - Security gate
+## OpenTofu preflight
 
-Use:
-
-```text
-runbooks/linux-vm-security-hardening.md
-```
-
-Current validated controls include:
-
-- removing OpenSSH UMAC-64 MAC algorithms;
-- persistently blocking IPv4 ICMP timestamp requests;
-- fresh SSH validation;
-- idempotence;
-- external scan verification.
-
-Do not proceed directly to PostgreSQL when security passes. The next mandatory stage is observability.
-
----
-
-# Stage 7 - Observability gate
-
-Use:
+Load provider credentials from the protected external environment file:
 
 ```text
-runbooks/linux-vm-observability-bootstrap.md
-```
-
-Current new-VM standard:
-
-```text
-Grafana Alloy native service
- -> Linux node metrics
- -> ids-01 Prometheus 192.168.2.242:9090
- -> systemd journal
- -> ids-01 Loki 192.168.2.242:3100
- -> Grafana on ids-01
-```
-
-The authoritative Ansible implementation is:
-
-```text
-ansible/roles/alloy/
-ansible/playbooks/alloy.yml
-```
-
-Observability is complete only after:
-
-- Alloy syntax/preflight passes;
-- deployment succeeds;
-- second run is idempotent;
-- readiness/health pass;
-- journal access as unprivileged `alloy` passes;
-- `node_uname_info` and core metrics are visible centrally;
-- unique journal marker is visible in Loki;
-- duplicate metrics path check passes;
-- Grafana source queries work;
-- required alerts are validated;
-- reboot persistence passes.
-
-Do **not** treat "monitoring scheduled" as sufficient. This gate must be complete before database/web application commissioning.
-
----
-
-# Stage 8 - Application sequence
-
-Only after security and observability gates close:
-
-```text
-runbooks/postgresql-install.md
-runbooks/timescaledb-install.md
-runbooks/nginx-install.md
-```
-
-Each application runbook must re-check that the accepted Alloy/host telemetry has not regressed after package/service changes.
-
----
-
-# Stage 9 - Drift/idempotence
-
-After successful VM creation and baseline commissioning:
-
-```bash
-tofu plan
-```
-
-Expected: no unintended VM drift.
-
-Ansible-managed layers should also be rerun for idempotence before closure.
-
-Persistent GUI changes create drift and must be brought back into code.
-
----
-
-# Stage 10 - Rollback/destroy
-
-Only for an explicitly disposable VM with no required data:
-
-```bash
-tofu plan -destroy
-tofu destroy
+/home/james/.config/homelab-iac/proxmox.env
 ```
 
 Then:
 
 ```bash
-qm list
-pvesm status
+cd /home/james/projects/proxmox/tofu
+
+tofu init -input=false -lockfile=readonly
+tofu fmt -check
+tofu validate
+tofu plan -input=false -detailed-exitcode
 ```
 
-Confirm no orphaned disk remains.
+Plan gates must prove that only the intended resource action is present.
 
-Never destroy a database VM with retained data without a proven backup/restore path.
+For clean creation:
+
+```text
+exactly one create
+zero unrelated changes
+```
+
+For a controlled hostname transition, only the intended resource name field may change. Any additional property change must fail the preflight gate.
+
+---
+
+## Template gate
+
+Before touching the target VM, validate template 9001.
+
+Required template checks:
+
+```text
+template exists
+full clone can be created on vm-ssd
+QEMU Guest Agent responds inside smoke clone
+smoke clone is removed after the test
+```
+
+Do not continue if the template cannot provide a working guest agent.
+
+---
+
+## Guest-agent acceptance
+
+After creation:
+
+```bash
+qm status <VMID>
+qm agent <VMID> ping
+```
+
+Use QGA to obtain guest identity and network information rather than guessing when the guest is ready.
+
+Required:
+
+```text
+VM running
+expected MAC
+QGA responds
+guest reports expected IP
+hostname matches intended identity
+Debian VERSION_CODENAME=trixie
+```
+
+---
+
+## Verified SSH trust
+
+A rebuilt guest has a new SSH host key. Stale controller `known_hosts` data must never be silently trusted or worked around by disabling checking.
+
+Accepted sequence:
+
+```text
+1. Through trusted Proxmox/QGA, run:
+   ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub
+
+2. Obtain the ED25519 network key with ssh-keyscan.
+
+3. Convert network results to unique SHA256 fingerprints.
+
+4. Require exactly one unique fingerprint.
+
+5. Require exact equality with the QGA fingerprint.
+
+6. Write the verified network key to a temporary known_hosts file.
+
+7. Use StrictHostKeyChecking=yes.
+```
+
+`ssh-keyscan` can emit duplicate lines for the same key. Count unique fingerprints, not raw lines.
+
+Controller SSH must also use:
+
+```text
+-o IdentitiesOnly=yes
+```
+
+This prevents an SSH agent offering unrelated identities before the intended private key.
+
+Recommended SSH options:
+
+```text
+-i /home/james/.ssh/id_ed25519
+-o IdentitiesOnly=yes
+-o BatchMode=yes
+-o UserKnownHostsFile=<verified-temporary-file>
+-o StrictHostKeyChecking=yes
+```
+
+The same options must be propagated to Ansible through `ANSIBLE_SSH_COMMON_ARGS`.
+
+---
+
+## cloud-init user acceptance
+
+The Debian cloud-init user is `james`.
+
+Required checks:
+
+```text
+account exists
+sudo membership present
+/home/james mode 0700
+/home/james/.ssh mode 0700
+authorized_keys mode 0600
+controller public-key fingerprint equals authorized_keys fingerprint
+sshd PubkeyAuthentication yes
+```
+
+Password authentication is disabled. A password-state value of `L` is not by itself evidence that public-key authentication is broken; direct key authentication has been proved with the correct controller identity.
+
+---
+
+## Ansible hand-off
+
+Permanent inventory:
+
+```text
+ansible/inventories/vm101/hosts.yml
+```
+
+Vault password file:
+
+```text
+/home/james/.config/homelab-iac/ansible-vault-password
+```
+
+Required mode:
+
+```text
+0600
+```
+
+Example controller environment:
+
+```bash
+export ANSIBLE_HOST_KEY_CHECKING=True
+export ANSIBLE_SSH_COMMON_ARGS="-o IdentitiesOnly=yes -o UserKnownHostsFile=<verified-known-hosts> -o StrictHostKeyChecking=yes"
+export ANSIBLE_ROLES_PATH="/home/james/projects/proxmox/ansible/roles:/home/james/projects/proxmox/ansible/linux-security-hardening/roles"
+```
+
+Do not use `--ask-vault-pass` in an unattended build. Use the protected external Vault password file.
+
+---
+
+## Standard VM101 service order
+
+```text
+linux-security-hardening/playbook.yml
+playbooks/unattended-upgrades.yml
+playbooks/alloy.yml
+playbooks/postgresql.yml
+playbooks/timescaledb.yml
+playbooks/nginx.yml
+playbooks/zabbix-server.yml
+```
+
+Every first-pass stage must have:
+
+```text
+unreachable=0
+failed=0
+```
+
+Every second-pass stage must have:
+
+```text
+changed=0
+unreachable=0
+failed=0
+```
+
+---
+
+## Current validation record - 2 September 2026
+
+A clean VM was created successfully from template 9001 with:
+
+```text
+hostname=zabbix-server-01
+VMID=101
+IP=192.168.2.253
+```
+
+Validated gates:
+
+```text
+OpenTofu create:                         PASS
+QEMU Guest Agent:                       PASS
+IP discovery:                           PASS
+QGA/network ED25519 exact match:        PASS
+Strict SSH with verified known_hosts:   PASS
+IdentitiesOnly=yes authentication:      PASS
+Linux security hardening:               PASS
+Unattended-upgrades:                    PASS
+```
+
+First-pass recaps:
+
+```text
+security hardening:
+app-platform-01 : ok=15 changed=5 unreachable=0 failed=0
+
+unattended upgrades:
+app-platform-01 : ok=8 changed=1 unreachable=0 failed=0
+```
+
+The inventory alias still shows `app-platform-01`; final cleanup should align the inventory name with `zabbix-server-01` without changing the proven host/IP identity.
+
+---
+
+## Application validation
+
+After base commissioning, use the service-specific runbooks:
+
+```text
+runbooks/alloy-install.md
+runbooks/postgresql-install.md
+runbooks/timescaledb-install.md
+runbooks/nginx-install.md
+runbooks/zabbix-server-install.md
+```
+
+Do not claim Zabbix TimescaleDB hypertables are configured merely because the TimescaleDB package and preload are present. Zabbix-specific TimescaleDB conversion must be separately automated and validated.
+
+---
+
+## Final drift gate
+
+After all roles and live validation:
+
+```bash
+tofu plan -input=false -detailed-exitcode
+```
+
+Required result:
+
+```text
+exit code 0
+```
+
+Any result showing VM changes means the build is not closed.
 
 ---
 
 ## Acceptance checklist
 
-The Linux VM platform build is ready for application installation only when:
+A Linux VM IaC build is GREEN only when:
 
-- [ ] VM is declared in OpenTofu.
-- [ ] OpenTofu validation/plan passes.
-- [ ] VM uses intended storage/network.
-- [ ] cloud-init completes.
-- [ ] SSH key access works.
-- [ ] guest agent works where enabled.
-- [ ] no unexpected failed units exist.
-- [ ] security-hardening playbook passes.
-- [ ] fresh SSH works after hardening.
-- [ ] hardening idempotence passes.
-- [ ] Alloy deployment passes.
-- [ ] Alloy idempotence passes.
-- [ ] metrics E2E passes.
-- [ ] logs E2E passes.
-- [ ] duplicate metrics check passes.
-- [ ] Grafana source data passes.
-- [ ] alert coverage passes.
-- [ ] reboot persistence passes.
-- [ ] post-apply OpenTofu plan is clean.
-
-Only then proceed to PostgreSQL.
-
----
-
-## VM101 status record
-
-As of 2026-09-01:
-
-```text
-VM101 IaC:                    PASS
-Guest commissioning:         PASS
-Security hardening:           PASS
-Security idempotence:         PASS
-Alloy deployment:             PASS
-Alloy version:                v1.19.2
-Alloy idempotence:            PASS (changed=0)
-Metrics E2E:                  PASS
-Logs E2E:                     PASS
-Duplicate metric path:        PASS
-Grafana source data:          PASS
-Alert coverage:               OUTSTANDING
-Reboot observability proof:   OUTSTANDING
-```
-
-PostgreSQL remains gated until the outstanding observability items are closed.
+- [ ] OpenTofu ownership state is consistent.
+- [ ] plan contains only intended resource actions.
+- [ ] template 9001 QGA smoke gate passes.
+- [ ] guest is created on `vm-ssd`.
+- [ ] expected VMID/MAC/hostname are present.
+- [ ] QEMU Guest Agent passes.
+- [ ] guest IP is validated.
+- [ ] QGA/network ED25519 fingerprints match.
+- [ ] temporary verified `known_hosts` is used.
+- [ ] `StrictHostKeyChecking=yes` is used.
+- [ ] `IdentitiesOnly=yes` is used.
+- [ ] cloud-init SSH key matches the controller key.
+- [ ] security hardening succeeds.
+- [ ] unattended-upgrades succeeds.
+- [ ] Alloy succeeds.
+- [ ] required application roles succeed.
+- [ ] full second Ansible run is `changed=0`.
+- [ ] final OpenTofu plan is zero drift.
