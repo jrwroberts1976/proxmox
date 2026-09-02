@@ -170,7 +170,7 @@ run_ansible_playbook() {
         cd "$ANSIBLE_DIR"
 
         ANSIBLE_HOST_KEY_CHECKING=True \
-        ANSIBLE_SSH_COMMON_ARGS="-o UserKnownHostsFile=$KNOWN_HOSTS -o StrictHostKeyChecking=yes" \
+        ANSIBLE_SSH_COMMON_ARGS="-o IdentitiesOnly=yes -o UserKnownHostsFile=$KNOWN_HOSTS -o StrictHostKeyChecking=yes" \
         ANSIBLE_ROLES_PATH="$ANSIBLE_DIR/roles:$ANSIBLE_DIR/linux-security-hardening/roles" \
         ansible-playbook \
           -i "$ANSIBLE_INVENTORY" \
@@ -893,6 +893,7 @@ for attempt in $(seq 1 24); do
 
     if ssh \
         -i "$SSH_KEY" \
+        -o IdentitiesOnly=yes \
         -o BatchMode=yes \
         -o ConnectTimeout=5 \
         -o UserKnownHostsFile="$KNOWN_HOSTS" \
