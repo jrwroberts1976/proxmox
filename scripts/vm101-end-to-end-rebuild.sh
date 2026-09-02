@@ -397,6 +397,29 @@ case "$PREFLIGHT_RC" in
 
         if jq -e \
           --arg resource "$RESOURCE" \
+          --arg vm_name "$VM_NAME" '
+            [
+              .resource_changes[]?
+              | select(.change.actions != ["no-op"])
+            ] as $changes
+            |
+            ($changes | length) == 1
+            and $changes[0].address == $resource
+            and $changes[0].change.actions == ["update"]
+            and $changes[0].change.before.name != $vm_name
+            and $changes[0].change.after.name == $vm_name
+            and (
+              ($changes[0].change.before | del(.name))
+              ==
+              ($changes[0].change.after | del(.name))
+            )
+          ' "$PREFLIGHT_JSON" >/dev/null
+        then
+            echo "hostname_change=$VM_NAME"
+            pass "controlled hostname-only update accepted"
+
+        elif jq -e \
+          --arg resource "$RESOURCE" \
           --argjson old_template 9000 \
           --argjson new_template "$TEMPLATE_VMID" '
             [
