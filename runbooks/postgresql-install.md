@@ -23,6 +23,7 @@ Linux VM IaC
   -> PostgreSQL
   -> TimescaleDB
   -> Nginx
+  -> Zabbix Server
 ```
 
 PostgreSQL must not be used as a shortcut around an incomplete VM baseline. Security and observability are mandatory gates before database installation.
@@ -59,13 +60,10 @@ For VM101, the observability baseline has already proved:
 ```text
 Prometheus: 192.168.2.242:9090
 Loki:       192.168.2.242:3100
-Alloy:      v1.19.2
 hostname:   app-platform-01
 role:       application
 environment: homelab
 ```
-
-Before PostgreSQL installation, the remaining observability acceptance items such as required alert coverage and reboot persistence must also be closed.
 
 Verify the target VM before proceeding:
 
@@ -83,10 +81,16 @@ Stop if the baseline has regressed.
 
 ## 3. Repository implementation
 
-Current defaults:
+Current defaults include:
 
 ```yaml
 postgresql_version: 17
+postgresql_packages:
+  - acl
+  - "postgresql-{{ postgresql_version }}"
+  - "postgresql-client-{{ postgresql_version }}"
+  - postgresql-contrib
+  - python3-psycopg2
 postgresql_listen_addresses: localhost
 postgresql_port: 5432
 postgresql_databases: []
@@ -94,7 +98,41 @@ postgresql_users: []
 postgresql_hba_rules: []
 ```
 
-The default is deliberately local-only. Do not expose PostgreSQL remotely unless there is a documented consumer and tightly-scoped `pg_hba.conf` rule.
+### Automated `acl` dependency
+
+The PostgreSQL role installs Debian's `acl` package automatically. This is an IaC-managed dependency and is **not** a manual pre-installation step.
+
+Why it is required:
+
+- Ansible connects to VM101 as the normal SSH user (`james`).
+- PostgreSQL administration tasks use `become_user: postgres`.
+- Ansible must securely make temporary module files readable by the unprivileged `postgres` account.
+- Debian's `acl` package provides `setfacl`, which Ansible uses for that privilege-escalation path.
+
+Without `acl`, role/database creation can fail before PostgreSQL is touched with an error similar to:
+
+```text
+Failed to set permissions on the temporary files Ansible needs to create
+chmod: invalid mode: 'A+user:postgres:rx:allow'
+```
+
+Do not work around this by manually installing `acl` on a freshly rebuilt guest. The PostgreSQL role must install it so the same dependency is present during unattended end-to-end rebuilds.
+
+Optional validation:
+
+```bash
+command -v setfacl
+dpkg -s acl | grep '^Status:'
+```
+
+Expected:
+
+```text
+/usr/bin/setfacl
+Status: install ok installed
+```
+
+The default PostgreSQL listener remains deliberately local-only. Do not expose PostgreSQL remotely unless there is a documented consumer and tightly-scoped `pg_hba.conf` rule.
 
 ---
 
@@ -102,26 +140,21 @@ The default is deliberately local-only. Do not expose PostgreSQL remotely unless
 
 Place the target VM in `postgresql_servers`.
 
-Example:
+VM101 uses the permanent inventory:
 
-```yaml
-all:
-  children:
-    postgresql_servers:
-      hosts:
-        db-01:
-          ansible_host: <DB_IP>
+```text
+ansible/inventories/vm101/hosts.yml
 ```
 
 Validate inventory:
 
 ```bash
 cd ansible
-ansible-inventory --graph
-ansible postgresql_servers -m ping
+ansible-inventory -i inventories/vm101/hosts.yml --graph --ask-vault-pass
+ansible -i inventories/vm101/hosts.yml postgresql_servers -m ping --ask-vault-pass
 ```
 
-A host may also remain in the Alloy inventory/group. Application-role membership must not remove observability management.
+A host may also remain in Alloy, TimescaleDB, Nginx and Zabbix groups. Application-role membership must not remove observability management.
 
 ---
 
@@ -129,26 +162,34 @@ A host may also remain in the Alloy inventory/group. Application-role membership
 
 Define environment-specific values outside the role defaults.
 
-Example:
+For Zabbix on VM101, the non-secret variable structure is:
 
 ```yaml
-postgresql_version: 17
-postgresql_listen_addresses: localhost
-postgresql_port: 5432
+postgresql_users:
+  - name: zabbix
+    password: "{{ vault_zabbix_db_password }}"
+    role_attr_flags: LOGIN
 
 postgresql_databases:
-  - name: homelab
-    owner: homelab_app
+  - name: zabbix
+    owner: zabbix
 
-postgresql_users:
-  - name: homelab_app
-    password: "{{ vault_homelab_db_password }}"
-    role_attr_flags: LOGIN
+zabbix_server_db_password: "{{ vault_zabbix_db_password }}"
 ```
 
-Store `vault_homelab_db_password` only in an encrypted Ansible Vault or another approved secret source.
+The actual `vault_zabbix_db_password` value belongs only in an encrypted Ansible Vault file. Never commit database passwords in plaintext inventory, defaults, playbooks, README files, shell history or CI logs.
 
-Never commit database passwords in inventory, defaults, playbooks, README files, shell history, or CI logs.
+VM101 keeps the encrypted secret under:
+
+```text
+ansible/inventories/vm101/group_vars/all/vault.yml
+```
+
+and non-secret references under:
+
+```text
+ansible/inventories/vm101/group_vars/all/main.yml
+```
 
 ---
 
@@ -159,8 +200,6 @@ Never commit database passwords in inventory, defaults, playbooks, README files,
 Before the first deployment, confirm the intended PostgreSQL major version remains available for Debian 13 and is compatible with the TimescaleDB package that will be installed next.
 
 The repository currently pins major version 17. Changing major PostgreSQL version is a design change, not a routine patch update.
-
-Do not change the major version during an existing database deployment without a documented upgrade/migration plan.
 
 ---
 
@@ -186,14 +225,14 @@ Expected: success.
 ## 9. Check mode
 
 ```bash
-ansible-playbook playbooks/postgresql.yml \
+ansible-playbook \
+  -i inventories/vm101/hosts.yml \
+  playbooks/postgresql.yml \
   --check --diff \
-  --limit <DB_HOST>
+  --ask-vault-pass
 ```
 
-Review all proposed changes. No unrelated service should be modified.
-
-Package installation and database modules can have limitations in check mode. Treat check mode as a preview, not as proof of runtime success.
+Review all proposed changes. Package installation and database modules can have limitations in check mode; treat check mode as a preview, not proof of runtime success.
 
 ---
 
@@ -203,12 +242,15 @@ Package installation and database modules can have limitations in check mode. Tr
 
 ```bash
 cd ansible
-ansible-playbook playbooks/postgresql.yml \
-  --limit <DB_HOST>
+ansible-playbook \
+  -i inventories/vm101/hosts.yml \
+  playbooks/postgresql.yml \
+  --ask-vault-pass
 ```
 
 The role will:
 
+- install `acl` automatically for Ansible's `become_user: postgres` path;
 - install PostgreSQL server/client packages;
 - install `postgresql-contrib` and Python PostgreSQL bindings;
 - create the managed `conf.d` include directory;
@@ -219,16 +261,24 @@ The role will:
 - create declared roles;
 - create declared databases.
 
+### VM101 validation record - 2 September 2026
+
+The first VM101 run with a declared `zabbix` role/database exposed the missing `acl` dependency. After adding `acl` to the role-managed package list, the rerun completed successfully:
+
+```text
+PLAY RECAP
+app-platform-01 : ok=9 changed=3 unreachable=0 failed=0 skipped=1
+```
+
+This proves the dependency must remain in IaC for future clean rebuilds.
+
 ---
 
 # Stage 3 - Service validation
 
 ## 11. Validate service state
 
-On the database VM:
-
 ```bash
-systemctl --no-pager --full status postgresql
 systemctl is-enabled postgresql
 systemctl is-active postgresql
 pg_lsclusters
@@ -251,11 +301,7 @@ Expected major version: `17` unless the repository baseline has deliberately cha
 pg_isready -h 127.0.0.1 -p 5432
 ```
 
-Expected:
-
-```text
-accepting connections
-```
+Expected: `accepting connections`.
 
 ## 14. Validate managed configuration
 
@@ -265,7 +311,7 @@ sudo -u postgres psql -Atqc "SHOW port;"
 sudo -u postgres psql -Atqc "SHOW password_encryption;"
 ```
 
-For the default build expect:
+Default expectation:
 
 ```text
 localhost
@@ -277,19 +323,21 @@ scram-sha-256
 
 # Stage 4 - Database and role validation
 
-## 15. List databases
+## 15. Validate declared objects
+
+For the VM101 Zabbix build, verify existence and ownership without printing any secret:
 
 ```bash
-sudo -u postgres psql -c '\l'
+sudo -u postgres psql -Atqc "SELECT rolname FROM pg_roles WHERE rolname='zabbix';"
+sudo -u postgres psql -Atqc "SELECT datname || '|' || pg_catalog.pg_get_userbyid(datdba) FROM pg_database WHERE datname='zabbix';"
 ```
 
-## 16. List roles
+Expected:
 
-```bash
-sudo -u postgres psql -c '\du'
+```text
+zabbix
+zabbix|zabbix
 ```
-
-Confirm only the intended application users/databases have been created.
 
 Do not print application passwords during validation.
 
@@ -297,66 +345,38 @@ Do not print application passwords during validation.
 
 # Stage 5 - Remote access, only if required
 
-## 17. Keep local-only by default
+PostgreSQL remains local-only by default. Do not change `listen_addresses` to `*` as a convenience measure.
 
-Do not change `listen_addresses` to `*` as a convenience measure.
-
-If another VM genuinely needs database access:
-
-1. set `postgresql_listen_addresses` to the required interface/address;
-2. add the smallest possible CIDR in `postgresql_hba_rules`;
-3. use `scram-sha-256` authentication;
-4. restrict the network path with host/Proxmox firewall rules;
-5. validate only the intended client can connect.
-
-Example rule shape:
-
-```text
-host    <database>    <user>    <client-ip>/32    scram-sha-256
-```
-
-After changing access rules, rerun the Ansible playbook rather than editing PostgreSQL files manually.
+If another VM genuinely requires access, use the smallest possible listener and `pg_hba.conf` scope, SCRAM-SHA-256 authentication and network/firewall restrictions.
 
 ---
 
 # Stage 6 - Idempotence
 
-## 18. Run the playbook again
+Run the playbook again:
 
 ```bash
-ansible-playbook playbooks/postgresql.yml \
-  --limit <DB_HOST>
+ansible-playbook \
+  -i inventories/vm101/hosts.yml \
+  playbooks/postgresql.yml \
+  --ask-vault-pass
 ```
 
-Expected: no unexpected changes on the second run.
+Expected acceptance target:
 
-Investigate repeated changes before proceeding to TimescaleDB.
+```text
+changed=0
+unreachable=0
+failed=0
+```
+
+Investigate repeated changes before proceeding.
 
 ---
 
-# Stage 7 - Basic functional test
-
-## 19. Test a disposable database operation
-
-For a fresh lab build only:
-
-```bash
-sudo -u postgres createdb runbook_test
-sudo -u postgres psql runbook_test -c 'CREATE TABLE healthcheck(id integer primary key, created_at timestamptz default now());'
-sudo -u postgres psql runbook_test -c 'INSERT INTO healthcheck(id) VALUES (1);'
-sudo -u postgres psql runbook_test -c 'SELECT * FROM healthcheck;'
-sudo -u postgres dropdb runbook_test
-```
-
-Expected: create, insert, select and drop all succeed.
-
----
-
-# Stage 8 - Observability regression check
+# Stage 7 - Observability regression check
 
 PostgreSQL installation must not silently break the already accepted host telemetry.
-
-After apply:
 
 ```bash
 systemctl is-active alloy
@@ -364,75 +384,46 @@ curl -fsS http://127.0.0.1:12345/-/healthy
 systemctl --failed --no-legend
 ```
 
-Centrally confirm:
-
-```promql
-node_uname_info{hostname="<HOSTNAME>"}
-```
-
-Generate a unique journal event if there is any doubt about log flow.
-
-PostgreSQL-specific exporters/log parsing are separate enhancements. Do not delay host-level monitoring closure waiting for them.
+PostgreSQL-specific exporters/log parsing are separate enhancements and do not replace the host-level Alloy baseline.
 
 ---
 
-# Stage 9 - Backup gate
+# Stage 8 - Backup gate
 
-## 20. Before storing important data
-
-A database VM is not production-ready until an off-host backup and restore method exists.
-
-At minimum the eventual database backup design must cover:
-
-- database logical backups or an approved PostgreSQL-aware backup approach;
-- Proxmox VM backup as a separate recovery layer;
-- off-host storage;
-- retention;
-- restore testing;
-- monitoring of backup failures.
-
-Do not treat an on-host VM snapshot as a database backup strategy.
+A database VM is not production-ready until an off-host backup and restore method exists. Proxmox VM backup is a separate recovery layer and is not by itself a PostgreSQL-aware database backup strategy.
 
 ---
 
-# Stage 10 - Rollback
-
-## 21. Configuration rollback
+# Stage 9 - Rollback
 
 If an Ansible configuration change breaks PostgreSQL:
 
-1. do not manually improvise changes unless needed for immediate recovery;
-2. revert the Git change;
-3. rerun the playbook;
-4. validate with `pg_isready` and the service checks above;
-5. confirm Alloy/host observability remains healthy.
+1. revert the Git change;
+2. rerun the playbook;
+3. validate with `pg_isready` and service checks;
+4. confirm Alloy/host observability remains healthy.
 
-## 22. Fresh disposable install removal
-
-For a disposable test VM, prefer destroying/recreating the entire guest through IaC rather than purging PostgreSQL packages and trying to return the machine to a pristine state.
-
-Never delete `/var/lib/postgresql` or destroy the VM if it contains data that has not been backed up and restore-tested.
+For a disposable test VM, prefer destroy/recreate through IaC rather than manually trying to return the guest to pristine state.
 
 ---
 
-## 23. Acceptance criteria
+## Acceptance criteria
 
 PostgreSQL installation is complete when:
 
-- [ ] IaC guest gate already passed.
-- [ ] Security-hardening gate already passed.
-- [ ] Observability gate already passed.
+- [ ] IaC guest gate passed.
+- [ ] Security-hardening gate passed.
+- [ ] Observability gate passed.
 - [ ] Ansible syntax check passes.
-- [ ] Playbook applies successfully.
+- [ ] `acl` is installed automatically by the PostgreSQL role; no manual prerequisite is required.
 - [ ] PostgreSQL service is enabled and active.
-- [ ] Intended major version is installed.
+- [ ] Intended PostgreSQL major version is installed.
 - [ ] `pg_isready` succeeds.
-- [ ] `listen_addresses`, port and SCRAM configuration match Git.
-- [ ] Intended database roles exist.
-- [ ] Intended databases exist.
-- [ ] No plaintext secrets are committed.
-- [ ] A second Ansible run is idempotent.
-- [ ] Basic create/read/drop functional test passes on the disposable build.
-- [ ] Alloy remains healthy and host metrics/logs remain visible after installation.
+- [ ] listener, port and SCRAM configuration match Git.
+- [ ] intended database roles exist.
+- [ ] intended databases exist with the correct owners.
+- [ ] no plaintext secrets are committed.
+- [ ] second Ansible run is idempotent (`changed=0`).
+- [ ] Alloy remains healthy after installation.
 
-Then proceed to `runbooks/timescaledb-install.md`.
+For the VM101 application platform, continue through TimescaleDB and Nginx, then proceed to `runbooks/zabbix-server-install.md`.
