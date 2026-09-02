@@ -14,7 +14,7 @@ EXPECTED_BRANCH="main"
 RESOURCE="proxmox_virtual_environment_vm.app_platform"
 
 VMID="101"
-VM_NAME="app-platform-01"
+VM_NAME="${1:-}"
 VM_IP="192.168.2.253"
 VM_MAC="BC:24:11:08:A2:33"
 
@@ -176,6 +176,7 @@ run_ansible_playbook() {
           -i "$ANSIBLE_INVENTORY" \
           "$playbook" \
           --private-key "$SSH_KEY" \
+          --extra-vars "alloy_hostname=$VM_NAME" \
           --vault-password-file "$VAULT_PASS_FILE"
     ) | tee "$stage_log"
 
@@ -214,6 +215,20 @@ echo "===== VM101 END-TO-END REBUILD ====="
 
 echo "work_root=$WORK_ROOT"
 echo "log=$LOG"
+
+
+echo
+echo "===== HOSTNAME INPUT GATE ====="
+
+[[ -n "$VM_NAME" ]] || \
+    fail "hostname required; usage: $0 <hostname>"
+
+[[ "$VM_NAME" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$ ]] || \
+    fail "invalid hostname: $VM_NAME"
+
+echo "hostname=$VM_NAME"
+
+pass "hostname input accepted"
 
 
 echo
@@ -336,6 +351,8 @@ set -a
 . "$ENV_FILE"
 
 set +a
+
+export TF_VAR_vm_name="$VM_NAME"
 
 cd "$TOFU_DIR"
 
