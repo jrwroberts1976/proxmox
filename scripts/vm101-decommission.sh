@@ -13,6 +13,11 @@ VM_NAME="zabbix-server-01"
 VM_MAC="BC:24:11:08:A2:33"
 PVE_HOST="192.168.2.70"
 BACKUP_DIR="/home/james/tofu-state-backups"
+
+PROMETHEUS_URL="http://192.168.2.242:9090"
+LOKI_URL="http://192.168.2.242:3100"
+MONITOR_SETTLE_SECONDS="${VM101_MONITOR_SETTLE_SECONDS:-30}"
+
 STAMP="$(date +%Y%m%d-%H%M%S)"
 PLAN="/tmp/vm101-decommission-$STAMP.tfplan"
 PLAN_JSON="${PLAN}.json"
@@ -41,7 +46,97 @@ cleanup() {
 }
 trap cleanup EXIT
 
-for cmd in git tofu jq ssh; do
+monitoring_retirement() {
+    local cutoff
+    local end
+    local prom_json
+    local prom_samples
+    local loki_json
+    local loki_entries
+    local loki_start
+    local loki_end
+
+    echo
+    echo "===== MONITORING RETIREMENT ====="
+
+    # Establish the telemetry cutoff after Proxmox has already proven the VM
+    # absent. The short delay prevents a same-second boundary from including a
+    # sample generated immediately before destruction.
+    sleep 2
+    cutoff="$(date +%s)"
+    echo "telemetry_cutoff_epoch=$cutoff"
+
+    echo "settle_seconds=$MONITOR_SETTLE_SECONDS"
+    sleep "$MONITOR_SETTLE_SECONDS"
+    end="$(date +%s)"
+
+    echo
+    echo "===== PROMETHEUS POST-DECOMMISSION GATE ====="
+
+    prom_json="$(
+        curl -fsS -G \
+          "$PROMETHEUS_URL/api/v1/query_range" \
+          --data-urlencode "query=up{job=\"linux-hosts\",host=\"$VM_NAME\"}" \
+          --data-urlencode "start=$cutoff" \
+          --data-urlencode "end=$end" \
+          --data-urlencode "step=15s"
+    )" || fail "Prometheus post-decommission query failed"
+
+    jq -e '.status == "success"' <<<"$prom_json" >/dev/null || \
+        fail "Prometheus did not return a successful query response"
+
+    prom_samples="$(
+        jq '[.data.result[]?.values[]?] | length' <<<"$prom_json"
+    )"
+
+    echo "post_decommission_prometheus_samples=$prom_samples"
+
+    [[ "$prom_samples" -eq 0 ]] || \
+        fail "fresh VM101 Prometheus telemetry exists after the decommission cutoff"
+
+    pass "no VM101 Prometheus samples after decommission cutoff"
+
+    echo
+    echo "===== LOKI POST-DECOMMISSION GATE ====="
+
+    loki_start="${cutoff}000000000"
+    loki_end="${end}000000000"
+
+    loki_json="$(
+        curl -fsS -G \
+          "$LOKI_URL/loki/api/v1/query_range" \
+          --data-urlencode "query={hostname=\"$VM_NAME\"}" \
+          --data-urlencode "start=$loki_start" \
+          --data-urlencode "end=$loki_end" \
+          --data-urlencode "direction=forward" \
+          --data-urlencode "limit=100"
+    )" || fail "Loki post-decommission query failed"
+
+    jq -e '.status == "success"' <<<"$loki_json" >/dev/null || \
+        fail "Loki did not return a successful query response"
+
+    loki_entries="$(
+        jq '[.data.result[]?.values[]?] | length' <<<"$loki_json"
+    )"
+
+    echo "post_decommission_loki_entries=$loki_entries"
+
+    [[ "$loki_entries" -eq 0 ]] || \
+        fail "fresh VM101 Loki log entries exist after the decommission cutoff"
+
+    pass "no VM101 Loki entries after decommission cutoff"
+    pass "Grafana has no post-decommission VM101 telemetry to display"
+    pass "historical Prometheus/Loki data retained; no delete API invoked"
+}
+
+final_banner() {
+    echo
+    echo "===================================="
+    echo "PASS: VM101 DECOMMISSION COMPLETE"
+    echo "===================================="
+}
+
+for cmd in git tofu jq ssh curl; do
     command -v "$cmd" >/dev/null 2>&1 || fail "required command missing: $cmd"
 done
 
@@ -83,6 +178,14 @@ echo "===== PROXMOX ACCESS GATE ====="
 pass "Proxmox SSH access"
 
 echo
+echo "===== MONITORING BACKEND GATE ====="
+curl -fsS "$PROMETHEUS_URL/-/ready" >/dev/null || \
+    fail "Prometheus is not ready at $PROMETHEUS_URL"
+curl -fsS "$LOKI_URL/ready" >/dev/null || \
+    fail "Loki is not ready at $LOKI_URL"
+pass "Prometheus and Loki are reachable before decommission"
+
+echo
 echo "===== OWNERSHIP STATE ====="
 cd "$TOFU_DIR"
 STATE="$(tofu state list)"
@@ -97,6 +200,8 @@ echo "proxmox_vm_exists=$VM_EXISTS"
 
 if [[ -z "$STATE" && "$VM_EXISTS" -eq 0 ]]; then
     pass "VM101 already decommissioned: state empty and VM absent"
+    monitoring_retirement
+    final_banner
     exit 0
 fi
 
@@ -111,6 +216,8 @@ if [[ "$STATE" == "$RESOURCE" && "$VM_EXISTS" -eq 0 ]]; then
     tofu state rm "$RESOURCE"
     [[ -z "$(tofu state list)" ]] || fail "state is not empty after stale-state repair"
     pass "stale VM101 ownership removed after proving VM absent"
+    monitoring_retirement
+    final_banner
     exit 0
 fi
 
@@ -171,7 +278,5 @@ fi
 pass "OpenTofu state empty"
 pass "VM101 absent from Proxmox"
 
-echo
-echo "===================================="
-echo "PASS: VM101 DECOMMISSION COMPLETE"
-echo "===================================="
+monitoring_retirement
+final_banner
