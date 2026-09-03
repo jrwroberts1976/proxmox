@@ -1,6 +1,7 @@
 ---
 postgresql_version: 17
 postgresql_packages:
+  - acl
   - "postgresql-{{ postgresql_version }}"
   - "postgresql-client-{{ postgresql_version }}"
   - postgresql-contrib

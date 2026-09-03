@@ -3,15 +3,18 @@ set -Eeuo pipefail
 
 REPO="/home/james/projects/proxmox"
 TOFU_DIR="$REPO/tofu"
+ANSIBLE_DIR="$REPO/ansible"
+ANSIBLE_INVENTORY="$ANSIBLE_DIR/inventories/vm101/hosts.yml"
+VAULT_PASS_FILE="/home/james/.config/homelab-iac/ansible-vault-password"
 ENV_FILE="/home/james/.config/homelab-iac/proxmox.env"
 STATE_BACKUP_DIR="/home/james/tofu-state-backups"
 
-EXPECTED_BRANCH="iac/app-platform-vm101"
+EXPECTED_BRANCH="main"
 
 RESOURCE="proxmox_virtual_environment_vm.app_platform"
 
 VMID="101"
-VM_NAME="app-platform-01"
+VM_NAME="${1:-}"
 VM_IP="192.168.2.253"
 VM_MAC="BC:24:11:08:A2:33"
 
@@ -140,10 +143,92 @@ plan_action_gate() {
 }
 
 
+
+run_ansible_playbook() {
+    local label="$1"
+    local playbook="$2"
+    local require_idempotent="${3:-0}"
+    local safe_label
+    local stage_log
+    local rc
+    local recap
+
+    safe_label="$(
+        printf '%s' "$label" |
+        tr '[:upper:] ' '[:lower:]-' |
+        tr -cd 'a-z0-9_-'
+    )"
+
+    stage_log="$WORK_ROOT/ansible-${safe_label}.log"
+
+    echo
+    echo "===== ANSIBLE: $label ====="
+
+    set +e
+
+    (
+        cd "$ANSIBLE_DIR"
+
+        ANSIBLE_HOST_KEY_CHECKING=True \
+        ANSIBLE_SSH_COMMON_ARGS="-o IdentitiesOnly=yes -o UserKnownHostsFile=$KNOWN_HOSTS -o StrictHostKeyChecking=yes" \
+        ANSIBLE_ROLES_PATH="$ANSIBLE_DIR/roles:$ANSIBLE_DIR/linux-security-hardening/roles" \
+        ansible-playbook \
+          -i "$ANSIBLE_INVENTORY" \
+          "$playbook" \
+          --private-key "$SSH_KEY" \
+          --extra-vars "alloy_hostname=$VM_NAME" \
+          --vault-password-file "$VAULT_PASS_FILE"
+    ) | tee "$stage_log"
+
+    rc=${PIPESTATUS[0]}
+
+    set -e
+
+    [[ "$rc" -eq 0 ]] || \
+        fail "Ansible stage failed: $label"
+
+    recap="$(
+        grep -E '^app-platform-01[[:space:]]+:' "$stage_log" |
+        tail -1
+    )"
+
+    [[ -n "$recap" ]] || \
+        fail "Ansible recap missing: $label"
+
+    [[ "$recap" == *"unreachable=0"* ]] || \
+        fail "Ansible unreachable host: $label"
+
+    [[ "$recap" == *"failed=0"* ]] || \
+        fail "Ansible failure recorded: $label"
+
+    if [[ "$require_idempotent" -eq 1 ]]; then
+        [[ "$recap" == *"changed=0"* ]] || \
+            fail "Ansible idempotence failed: $label"
+
+        pass "$label idempotent changed=0"
+    else
+        pass "$label"
+    fi
+}
+
 echo "===== VM101 END-TO-END REBUILD ====="
 
 echo "work_root=$WORK_ROOT"
 echo "log=$LOG"
+
+
+echo
+echo "===== HOSTNAME INPUT GATE ====="
+
+[[ -n "$VM_NAME" ]] || \
+    fail "hostname required; usage: $0 <hostname>"
+
+[[ "$VM_NAME" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$ ]] || \
+    fail "invalid hostname: $VM_NAME"
+
+echo "hostname=$VM_NAME"
+
+pass "hostname input accepted"
 
 
 echo
@@ -161,10 +246,14 @@ echo "===== LOCAL TOOLING GATE ====="
 
 for cmd in \
     git \
+    curl \
+    ansible-playbook \
+    ansible-vault \
     tofu \
     jq \
     ssh \
     ssh-keyscan \
+    ssh-keygen \
     sha256sum
 do
     require_cmd "$cmd"
@@ -175,6 +264,21 @@ pass "required local commands available"
 
 echo
 echo "===== LOCAL FILE GATE ====="
+
+[[ -f "$ANSIBLE_INVENTORY" ]] || \
+    fail "VM101 Ansible inventory missing: $ANSIBLE_INVENTORY"
+
+[[ -f "$VAULT_PASS_FILE" ]] || \
+    fail "Ansible Vault password file missing: $VAULT_PASS_FILE"
+
+[[ "$(stat -c "%a" "$VAULT_PASS_FILE")" == "600" ]] || \
+    fail "Ansible Vault password file must have mode 600"
+
+ansible-vault view \
+  --vault-password-file "$VAULT_PASS_FILE" \
+  "$ANSIBLE_DIR/inventories/vm101/group_vars/all/vault.yml" \
+  >/dev/null || \
+    fail "Ansible Vault decryption gate failed"
 
 [[ -f "$ENV_FILE" ]] || \
     fail "provider environment file missing: $ENV_FILE"
@@ -231,7 +335,6 @@ echo "===== PROXMOX PREREQUISITE GATE ====="
     command -v qm >/dev/null &&
     command -v vzdump >/dev/null &&
     command -v zstd >/dev/null &&
-    qm status '$VMID' >/dev/null &&
     qm config '$TEMPLATE_VMID' >/dev/null
 " || fail "Proxmox VM/template/backup prerequisite failed"
 
@@ -248,6 +351,8 @@ set -a
 
 set +a
 
+export TF_VAR_vm_name="$VM_NAME"
+
 cd "$TOFU_DIR"
 
 tofu init \
@@ -259,6 +364,35 @@ tofu fmt -check
 tofu validate
 
 pass "OpenTofu init/fmt/validate"
+
+
+echo
+echo "===== BUILD MODE GATE ====="
+
+STATE_BEFORE="$(tofu state list)"
+
+if "${PVE_SSH[@]}" \
+     "qm status '$VMID'" \
+     >/dev/null 2>&1
+then
+    VM_EXISTS=1
+else
+    VM_EXISTS=0
+fi
+
+if [[ -z "$STATE_BEFORE" && "$VM_EXISTS" -eq 0 ]]; then
+    CREATE_ONLY=1
+    pass "clean-create mode: state empty and VM$VMID absent"
+
+elif [[ "$STATE_BEFORE" == "$RESOURCE" && "$VM_EXISTS" -eq 1 ]]; then
+    CREATE_ONLY=0
+    pass "rebuild mode: VM$VMID is consistently managed"
+
+else
+    echo "state=${STATE_BEFORE:-EMPTY}"
+    echo "proxmox_vm_exists=$VM_EXISTS"
+    fail "OpenTofu/Proxmox ownership state is inconsistent"
+fi
 
 
 echo
@@ -289,7 +423,38 @@ case "$PREFLIGHT_RC" in
     2)
         tofu show -json "$PREFLIGHT_PLAN" > "$PREFLIGHT_JSON"
 
-        if jq -e \
+        if [[ "$CREATE_ONLY" -eq 1 ]]; then
+
+            plan_action_gate \
+              "$PREFLIGHT_PLAN" \
+              "create"
+
+            pass "clean-create plan accepted"
+
+        elif jq -e \
+          --arg resource "$RESOURCE" \
+          --arg vm_name "$VM_NAME" '
+            [
+              .resource_changes[]?
+              | select(.change.actions != ["no-op"])
+            ] as $changes
+            |
+            ($changes | length) == 1
+            and $changes[0].address == $resource
+            and $changes[0].change.actions == ["update"]
+            and $changes[0].change.before.name != $vm_name
+            and $changes[0].change.after.name == $vm_name
+            and (
+              ($changes[0].change.before | del(.name))
+              ==
+              ($changes[0].change.after | del(.name))
+            )
+          ' "$PREFLIGHT_JSON" >/dev/null
+        then
+            echo "hostname_change=$VM_NAME"
+            pass "controlled hostname-only update accepted"
+
+        elif jq -e \
           --arg resource "$RESOURCE" \
           --argjson old_template 9000 \
           --argjson new_template "$TEMPLATE_VMID" '
@@ -424,6 +589,8 @@ pass \
 
 
 echo
+if [[ "$CREATE_ONLY" -eq 0 ]]; then
+
 echo "===== FRESH VM101 BACKUP ====="
 
 BACKUP_RESULT="$(
@@ -533,6 +700,15 @@ then
 fi
 
 pass "VM101 absent from Proxmox"
+
+
+echo
+else
+
+    echo "===== EXISTING VM DESTRUCTION ====="
+    pass "clean-create mode: VM backup and destruction skipped"
+
+fi
 
 
 echo
@@ -646,18 +822,84 @@ echo "===== DIRECT SSH IDENTITY GATE ====="
 chmod 600 "$KNOWN_HOSTS"
 
 
+echo
+echo "===== VERIFIED SSH HOST KEY GATE ====="
+
+QGA_HOSTKEY_FINGERPRINT="$(
+    "${PVE_SSH[@]}" \
+      "qm guest exec '$VMID' -- ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub" |
+    jq -r '."out-data" // empty' |
+    awk 'NR == 1 {print $2}'
+)"
+
+[[ "$QGA_HOSTKEY_FINGERPRINT" == SHA256:* ]] || \
+    fail "could not obtain trusted ED25519 fingerprint through QGA"
+
+
+HOSTKEY_READY=0
+
+for attempt in $(seq 1 24); do
+    NETWORK_HOSTKEY_LINE="$(
+        ssh-keyscan -T 5 -t ed25519 "$VM_IP" 2>/dev/null || true
+    )"
+
+    if [[ -z "$NETWORK_HOSTKEY_LINE" ]]; then
+        echo "attempt=$attempt ssh_host_key=WAIT"
+        sleep 5
+        continue
+    fi
+
+    NETWORK_HOSTKEY_FINGERPRINTS="$(
+        printf '%s\n' "$NETWORK_HOSTKEY_LINE" |
+        ssh-keygen -lf - |
+        awk '{seen[$2]=1} END {for (fingerprint in seen) print fingerprint}'
+    )"
+
+    NETWORK_HOSTKEY_COUNT="$(
+        printf '%s\n' "$NETWORK_HOSTKEY_FINGERPRINTS" |
+        awk 'NF {count++} END {print count+0}'
+    )"
+
+    [[ "$NETWORK_HOSTKEY_COUNT" -eq 1 ]] || \
+        fail "unexpected number of unique network ED25519 fingerprints: $NETWORK_HOSTKEY_COUNT"
+
+    NETWORK_HOSTKEY_FINGERPRINT="$(
+        printf '%s\n' "$NETWORK_HOSTKEY_FINGERPRINTS" |
+        awk 'NR == 1 {print}'
+    )"
+
+    echo "qga_fingerprint=$QGA_HOSTKEY_FINGERPRINT"
+    echo "network_fingerprint=$NETWORK_HOSTKEY_FINGERPRINT"
+
+    [[ "$NETWORK_HOSTKEY_FINGERPRINT" == "$QGA_HOSTKEY_FINGERPRINT" ]] || \
+        fail "network SSH host key does not match trusted QGA fingerprint"
+
+    printf '%s\n' "$NETWORK_HOSTKEY_LINE" > "$KNOWN_HOSTS"
+    chmod 600 "$KNOWN_HOSTS"
+
+    HOSTKEY_READY=1
+    break
+done
+
+[[ "$HOSTKEY_READY" -eq 1 ]] || \
+    fail "verified SSH host key was not available"
+
+pass "network ED25519 host key matches trusted QGA fingerprint"
+
+
 SSH_READY=0
 
 for attempt in $(seq 1 24); do
 
     if ssh \
         -i "$SSH_KEY" \
+        -o IdentitiesOnly=yes \
         -o BatchMode=yes \
         -o ConnectTimeout=5 \
         -o UserKnownHostsFile="$KNOWN_HOSTS" \
-        -o StrictHostKeyChecking=accept-new \
+        -o StrictHostKeyChecking=yes \
         "james@$VM_IP" \
-        'test "$(hostname)" = "app-platform-01" &&
+        'test "$(hostname)" = "'"$VM_NAME"'" &&
          grep -q "VERSION_CODENAME=trixie" /etc/os-release' \
         >/dev/null 2>&1
     then
@@ -684,6 +926,197 @@ done
 
 pass \
   "SSH identity: $VM_NAME / Debian trixie"
+
+
+echo
+echo "===== ANSIBLE SERVICE DEPLOYMENT ====="
+
+run_ansible_playbook \
+  "Linux security hardening" \
+  "linux-security-hardening/playbook.yml"
+
+run_ansible_playbook \
+  "Unattended upgrades" \
+  "playbooks/unattended-upgrades.yml"
+
+run_ansible_playbook \
+  "Alloy" \
+  "playbooks/alloy.yml"
+
+run_ansible_playbook \
+  "PostgreSQL" \
+  "playbooks/postgresql.yml"
+
+run_ansible_playbook \
+  "TimescaleDB" \
+  "playbooks/timescaledb.yml"
+
+run_ansible_playbook \
+  "Nginx" \
+  "playbooks/nginx.yml"
+
+run_ansible_playbook \
+  "Zabbix Server" \
+  "playbooks/zabbix-server.yml"
+
+pass "VM101 Ansible service deployment"
+
+
+echo
+echo "===== LIVE PLATFORM VALIDATION ====="
+
+VM_SSH=(
+    ssh
+    -i "$SSH_KEY"
+    -o BatchMode=yes
+    -o ConnectTimeout=5
+    -o UserKnownHostsFile="$KNOWN_HOSTS"
+    -o StrictHostKeyChecking=yes
+    "james@$VM_IP"
+)
+
+"${VM_SSH[@]}" \
+  "sudo -n systemctl is-active \
+    postgresql \
+    alloy \
+    nginx \
+    php8.4-fpm \
+    zabbix-server \
+    zabbix-agent2" \
+  >/dev/null || \
+    fail "one or more VM101 platform services are not active"
+
+pass "platform services active"
+
+
+PG_VERSION="$(
+    "${VM_SSH[@]}" \
+      "sudo -n -u postgres psql -Atqc \"SHOW server_version;\""
+)"
+
+[[ "$PG_VERSION" == 17.* ]] || \
+    fail "unexpected PostgreSQL version: $PG_VERSION"
+
+pass "PostgreSQL $PG_VERSION"
+
+
+TS_PRELOAD="$(
+    "${VM_SSH[@]}" \
+      "sudo -n -u postgres psql -Atqc \"SHOW shared_preload_libraries;\""
+)"
+
+[[ "$TS_PRELOAD" == *timescaledb* ]] || \
+    fail "TimescaleDB is not present in shared_preload_libraries"
+
+
+TS_AVAILABLE="$(
+    "${VM_SSH[@]}" \
+      "sudo -n -u postgres psql -Atqc \"SELECT default_version FROM pg_available_extensions WHERE name='timescaledb';\""
+)"
+
+[[ -n "$TS_AVAILABLE" ]] || \
+    fail "TimescaleDB extension is not available"
+
+pass "TimescaleDB available version $TS_AVAILABLE"
+
+
+ZABBIX_SCHEMA="$(
+    "${VM_SSH[@]}" \
+      "sudo -n -u postgres psql -d zabbix -Atqc \"SELECT CASE WHEN to_regclass('public.users') IS NULL THEN 0 ELSE 1 END;\""
+)"
+
+[[ "$ZABBIX_SCHEMA" == "1" ]] || \
+    fail "Zabbix PostgreSQL schema is missing"
+
+
+ZABBIX_TABLE_COUNT="$(
+    "${VM_SSH[@]}" \
+      "sudo -n -u postgres psql -d zabbix -Atqc \"SELECT count(*) FROM pg_tables WHERE schemaname='public';\""
+)"
+
+[[ "$ZABBIX_TABLE_COUNT" =~ ^[0-9]+$ ]] || \
+    fail "invalid Zabbix table count: $ZABBIX_TABLE_COUNT"
+
+(( ZABBIX_TABLE_COUNT >= 200 )) || \
+    fail "Zabbix schema table count too low: $ZABBIX_TABLE_COUNT"
+
+pass "Zabbix schema present with $ZABBIX_TABLE_COUNT tables"
+
+
+"${VM_SSH[@]}" \
+  "sudo -n nginx -t" \
+  >/dev/null 2>&1 || \
+    fail "Nginx configuration validation failed"
+
+pass "Nginx configuration valid"
+
+
+"${VM_SSH[@]}" \
+  "ss -ltn | grep -q ':8080 ' &&
+   ss -ltn | grep -q ':10051 ' &&
+   ss -ltn | grep -q ':10050 '" || \
+    fail "expected Zabbix/Nginx listeners are missing"
+
+pass "Zabbix listeners 8080/10051/10050"
+
+
+FRONTEND_STATUS="$(
+    curl \
+      --silent \
+      --show-error \
+      --output /dev/null \
+      --write-out '%{http_code}' \
+      --max-time 10 \
+      "http://$VM_IP:8080/"
+)"
+
+[[ "$FRONTEND_STATUS" == "200" ]] || \
+    fail "Zabbix frontend HTTP status is $FRONTEND_STATUS"
+
+pass "Zabbix frontend HTTP 200"
+
+pass "VM101 live platform validation"
+
+
+echo
+echo "===== ANSIBLE IDEMPOTENCE GATE ====="
+
+run_ansible_playbook \
+  "Linux security hardening idempotence" \
+  "linux-security-hardening/playbook.yml" \
+  1
+
+run_ansible_playbook \
+  "Unattended upgrades idempotence" \
+  "playbooks/unattended-upgrades.yml" \
+  1
+
+run_ansible_playbook \
+  "Alloy idempotence" \
+  "playbooks/alloy.yml" \
+  1
+
+run_ansible_playbook \
+  "PostgreSQL idempotence" \
+  "playbooks/postgresql.yml" \
+  1
+
+run_ansible_playbook \
+  "TimescaleDB idempotence" \
+  "playbooks/timescaledb.yml" \
+  1
+
+run_ansible_playbook \
+  "Nginx idempotence" \
+  "playbooks/nginx.yml" \
+  1
+
+run_ansible_playbook \
+  "Zabbix Server idempotence" \
+  "playbooks/zabbix-server.yml" \
+  1
+
+pass "all VM101 Ansible stages idempotent"
 
 
 echo

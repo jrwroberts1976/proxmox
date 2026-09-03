@@ -141,3 +141,12 @@
     name: nginx
     state: reloaded
   when: zabbix_nginx_listen_config.changed or zabbix_nginx_name_config.changed
+
+- name: Configure Zabbix web frontend
+  ansible.builtin.template:
+    src: zabbix.conf.php.j2
+    dest: /etc/zabbix/web/zabbix.conf.php
+    owner: root
+    group: www-data
+    mode: "0640"
+  no_log: true
