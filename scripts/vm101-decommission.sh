@@ -4,6 +4,7 @@ set -Eeuo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd -- "$SCRIPT_DIR/.." && pwd)"
 TOFU_DIR="$REPO/tofu"
+ENV_FILE="/home/james/.config/homelab-iac/proxmox.env"
 
 EXPECTED_BRANCH="${VM101_EXPECTED_BRANCH:-main}"
 RESOURCE="proxmox_virtual_environment_vm.app_platform"
@@ -64,6 +65,17 @@ echo "branch=$CURRENT_BRANCH"
     fail "repository is not clean"
 }
 pass "repository authority is clean"
+
+echo
+echo "===== PROVIDER ENVIRONMENT GATE ====="
+[[ -f "$ENV_FILE" ]] || fail "provider environment file missing: $ENV_FILE"
+set -a
+# shellcheck disable=SC1090
+. "$ENV_FILE"
+set +a
+[[ -n "${PROXMOX_VE_ENDPOINT:-}" ]] || \
+    fail "PROXMOX_VE_ENDPOINT is missing after loading provider environment"
+pass "Proxmox provider environment loaded"
 
 echo
 echo "===== PROXMOX ACCESS GATE ====="
