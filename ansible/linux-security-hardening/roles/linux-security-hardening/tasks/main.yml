@@ -38,6 +38,20 @@
       {{ linux_security_hardening_iptables_binary }}
   when: linux_security_hardening_block_icmp_timestamp
 
+- name: Disable SSH socket activation when explicitly requested
+  ansible.builtin.systemd:
+    name: "{{ linux_security_hardening_ssh_socket }}"
+    enabled: false
+    state: stopped
+  when: linux_security_hardening_disable_ssh_socket_activation
+
+- name: Ensure SSH service owns the listener after disabling socket activation
+  ansible.builtin.systemd:
+    name: "{{ linux_security_hardening_ssh_service }}"
+    enabled: true
+    state: started
+  when: linux_security_hardening_disable_ssh_socket_activation
+
 - name: Ensure OpenSSH drop-in directory exists
   ansible.builtin.file:
     path: /etc/ssh/sshd_config.d
