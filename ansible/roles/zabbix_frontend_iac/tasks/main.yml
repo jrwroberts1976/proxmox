@@ -1,0 +1,51 @@
+---
+- name: Validate Zabbix frontend IaC inputs
+  ansible.builtin.assert:
+    that:
+      - (zabbix_frontend_api_username | length) > 0
+      - (zabbix_frontend_api_password | length) > 0
+      - (zabbix_geomap_dashboard_name | length) > 0
+      - (zabbix_geomap_host_name | length) > 0
+      - (zabbix_geomap_location | length) > 0
+      - (zabbix_geomap_latitude | float) >= -90
+      - (zabbix_geomap_latitude | float) <= 90
+      - (zabbix_geomap_longitude | float) >= -180
+      - (zabbix_geomap_longitude | float) <= 180
+      - (zabbix_geomap_zoom | int) >= 0
+      - (zabbix_geomap_zoom | int) <= 30
+    fail_msg: "Zabbix frontend IaC requires valid API credentials, dashboard/host names and Geomap coordinates."
+  no_log: true
+
+- name: Install Zabbix frontend IaC helper
+  ansible.builtin.copy:
+    src: zabbix_frontend_iac.py
+    dest: /usr/local/libexec/homelab-zabbix-frontend-iac
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Apply Zabbix Geomap and host inventory authority
+  ansible.builtin.command:
+    argv:
+      - /usr/local/libexec/homelab-zabbix-frontend-iac
+      - --api-url
+      - "{{ zabbix_frontend_api_url }}"
+      - --dashboard-name
+      - "{{ zabbix_geomap_dashboard_name }}"
+      - --host-name
+      - "{{ zabbix_geomap_host_name }}"
+      - --location
+      - "{{ zabbix_geomap_location }}"
+      - --latitude
+      - "{{ zabbix_geomap_latitude }}"
+      - --longitude
+      - "{{ zabbix_geomap_longitude }}"
+      - --zoom
+      - "{{ zabbix_geomap_zoom | string }}"
+  environment:
+    ZABBIX_API_USERNAME: "{{ zabbix_frontend_api_username }}"
+    ZABBIX_API_PASSWORD: "{{ zabbix_frontend_api_password }}"
+  register: zabbix_frontend_iac_apply
+  changed_when: zabbix_frontend_iac_apply.rc == 2
+  failed_when: zabbix_frontend_iac_apply.rc not in [0, 2]
+  no_log: true
