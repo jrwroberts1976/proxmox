@@ -38,11 +38,31 @@
       {{ linux_security_hardening_iptables_binary }}
   when: linux_security_hardening_block_icmp_timestamp
 
+- name: Ensure OpenSSH privilege separation runtime directory exists
+  ansible.builtin.file:
+    path: "{{ linux_security_hardening_sshd_runtime_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+  when: >-
+    linux_security_hardening_manage_ssh_macs or
+    linux_security_hardening_disable_ssh_socket_activation
+
 - name: Disable SSH socket activation when explicitly requested
   ansible.builtin.systemd:
     name: "{{ linux_security_hardening_ssh_socket }}"
     enabled: false
     state: stopped
+  when: linux_security_hardening_disable_ssh_socket_activation
+
+- name: Recreate OpenSSH runtime directory after disabling socket activation
+  ansible.builtin.file:
+    path: "{{ linux_security_hardening_sshd_runtime_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
   when: linux_security_hardening_disable_ssh_socket_activation
 
 - name: Ensure SSH service owns the listener after disabling socket activation
