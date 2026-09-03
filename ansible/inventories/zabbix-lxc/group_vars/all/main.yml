@@ -1,0 +1,11 @@
+---
+postgresql_users:
+  - name: zabbix
+    password: "{{ vault_zabbix_db_password }}"
+    role_attr_flags: LOGIN
+
+postgresql_databases:
+  - name: zabbix
+    owner: zabbix
+
+zabbix_server_db_password: "{{ vault_zabbix_db_password }}"
