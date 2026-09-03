@@ -9,3 +9,4 @@ postgresql_databases:
     owner: zabbix
 
 zabbix_server_db_password: "{{ vault_zabbix_db_password }}"
+zabbix_frontend_api_password: "{{ vault_zabbix_admin_password | default('') }}"
