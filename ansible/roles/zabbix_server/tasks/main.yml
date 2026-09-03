@@ -24,6 +24,13 @@
     name: "{{ zabbix_server_packages }}"
     state: present
     update_cache: true
+  register: zabbix_server_package_install
+
+- name: Restart PHP-FPM after Zabbix package changes
+  ansible.builtin.service:
+    name: php8.4-fpm
+    state: restarted
+  when: zabbix_server_package_install.changed
 
 - name: Configure Zabbix server database host
   ansible.builtin.lineinfile:
