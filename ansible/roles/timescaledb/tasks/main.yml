@@ -92,4 +92,8 @@
     db: "{{ item }}"
     state: present
   become_user: postgres
+  vars:
+    ansible_become: true
+    ansible_become_method: su
+    ansible_become_flags: "-s /bin/sh"
   loop: "{{ timescaledb_databases }}"
