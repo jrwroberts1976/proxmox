@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-REPO="/home/james/projects/proxmox"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+REPO="$(cd -- "$SCRIPT_DIR/.." && pwd)"
+
 TOFU_DIR="$REPO/tofu"
 ANSIBLE_DIR="$REPO/ansible"
 ANSIBLE_INVENTORY="$ANSIBLE_DIR/inventories/vm101/hosts.yml"
@@ -9,7 +11,7 @@ VAULT_PASS_FILE="/home/james/.config/homelab-iac/ansible-vault-password"
 ENV_FILE="/home/james/.config/homelab-iac/proxmox.env"
 STATE_BACKUP_DIR="/home/james/tofu-state-backups"
 
-EXPECTED_BRANCH="main"
+EXPECTED_BRANCH="${VM101_EXPECTED_BRANCH:-main}"
 
 RESOURCE="proxmox_virtual_environment_vm.app_platform"
 
@@ -225,6 +227,7 @@ echo "===== HOSTNAME INPUT GATE ====="
 
 [[ "$VM_NAME" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$ ]] || \
     fail "invalid hostname: $VM_NAME"
+
 
 echo "hostname=$VM_NAME"
 
@@ -959,6 +962,11 @@ run_ansible_playbook \
   "Zabbix Server" \
   "playbooks/zabbix-server.yml"
 
+run_ansible_playbook \
+  "Zabbix frontend BH22 Geomap" \
+  "playbooks/zabbix-frontend-iac.yml" \
+  0
+
 pass "VM101 Ansible service deployment"
 
 
@@ -1060,11 +1068,50 @@ pass "Nginx configuration valid"
 pass "Zabbix listeners 8080/10051/10050"
 
 
+PHP_MODULES="$(
+    "${VM_SSH[@]}" "php -m"
+)"
+
+printf '%s\n' "$PHP_MODULES" | grep -Fxq 'pgsql' || \
+    fail "PHP PostgreSQL module pgsql is not loaded"
+
+printf '%s\n' "$PHP_MODULES" | grep -Fxq 'pdo_pgsql' || \
+    fail "PHP PostgreSQL module pdo_pgsql is not loaded"
+
+pass "PHP PostgreSQL modules pgsql/pdo_pgsql loaded"
+
+
+echo
+echo "===== UK LOCALE VALIDATION ====="
+
+GENERATED_LOCALES="$("${VM_SSH[@]}" "locale -a")"
+
+printf '%s\n' "$GENERATED_LOCALES" |
+  grep -Fxq 'en_GB.utf8' ||
+    fail "en_GB.UTF-8 locale is not generated"
+
+pass "en_GB.UTF-8 locale generated"
+
+DEFAULT_LOCALE="$("${VM_SSH[@]}" "cat /etc/default/locale")"
+
+printf '%s\n' "$DEFAULT_LOCALE" |
+  grep -Fxq 'LANG=en_GB.UTF-8' ||
+    fail "default LANG is not en_GB.UTF-8"
+
+printf '%s\n' "$DEFAULT_LOCALE" |
+  grep -Fxq 'LANGUAGE=en_GB:en' ||
+    fail "default LANGUAGE is not en_GB:en"
+
+pass "UK default locale configured"
+
+
+FRONTEND_BODY="$WORK_ROOT/zabbix-frontend.html"
+
 FRONTEND_STATUS="$(
     curl \
       --silent \
       --show-error \
-      --output /dev/null \
+      --output "$FRONTEND_BODY" \
       --write-out '%{http_code}' \
       --max-time 10 \
       "http://$VM_IP:8080/"
@@ -1074,6 +1121,16 @@ FRONTEND_STATUS="$(
     fail "Zabbix frontend HTTP status is $FRONTEND_STATUS"
 
 pass "Zabbix frontend HTTP 200"
+
+
+if grep -Fq \
+  'DB type "POSTGRESQL" is not supported by current setup' \
+  "$FRONTEND_BODY"
+then
+    fail "Zabbix frontend still reports PostgreSQL PHP support missing"
+fi
+
+pass "Zabbix frontend PostgreSQL support accepted"
 
 pass "VM101 live platform validation"
 
@@ -1114,6 +1171,11 @@ run_ansible_playbook \
 run_ansible_playbook \
   "Zabbix Server idempotence" \
   "playbooks/zabbix-server.yml" \
+  1
+
+run_ansible_playbook \
+  "Zabbix frontend BH22 Geomap idempotence" \
+  "playbooks/zabbix-frontend-iac.yml" \
   1
 
 pass "all VM101 Ansible stages idempotent"

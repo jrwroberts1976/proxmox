@@ -1,0 +1,11 @@
+---
+- name: Configure Zabbix frontend state
+  hosts: zabbix_servers
+  become: true
+  gather_facts: false
+
+  vars:
+    zabbix_frontend_api_password: "{{ vault_zabbix_bootstrap_admin_password }}"
+
+  roles:
+    - role: zabbix_frontend_iac

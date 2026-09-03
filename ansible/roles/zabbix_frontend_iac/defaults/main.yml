@@ -1,0 +1,11 @@
+---
+zabbix_frontend_api_url: "http://127.0.0.1:8080/api_jsonrpc.php"
+zabbix_frontend_api_username: "Admin"
+zabbix_frontend_api_password: ""
+
+zabbix_geomap_dashboard_name: "Global view"
+zabbix_geomap_host_name: "Zabbix server"
+zabbix_geomap_location: "BH22 8QL, West Parley, Dorset, UK"
+zabbix_geomap_latitude: "50.79039"
+zabbix_geomap_longitude: "-1.890218"
+zabbix_geomap_zoom: 15
