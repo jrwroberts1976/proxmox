@@ -26,12 +26,15 @@
     update_cache: true
   register: zabbix_server_package_install
 
-- name: Enable en_GB.UTF-8 locale
+- name: Enable required Zabbix UTF-8 locales
   ansible.builtin.lineinfile:
     path: /etc/locale.gen
-    regexp: '^#?\s*en_GB\.UTF-8\s+UTF-8$'
-    line: 'en_GB.UTF-8 UTF-8'
-  register: zabbix_en_gb_locale_config
+    regexp: "^#?\\s*{{ item | regex_escape }}\\s+UTF-8$"
+    line: "{{ item }} UTF-8"
+  loop:
+    - en_GB.UTF-8
+    - en_US.UTF-8
+  register: zabbix_locale_config
 
 - name: Read generated locales
   ansible.builtin.command:
@@ -41,16 +44,16 @@
   register: zabbix_generated_locales
   changed_when: false
 
-- name: Generate en_GB.UTF-8 locale
+- name: Generate required Zabbix UTF-8 locales
   ansible.builtin.command:
     argv:
       - locale-gen
-      - en_GB.UTF-8
   register: zabbix_locale_generate
   changed_when: true
   when: >-
-    zabbix_en_gb_locale_config.changed or
-    'en_GB.utf8' not in zabbix_generated_locales.stdout_lines
+    zabbix_locale_config.changed or
+    'en_GB.utf8' not in zabbix_generated_locales.stdout_lines or
+    'en_US.utf8' not in zabbix_generated_locales.stdout_lines
 
 - name: Configure UK default LANG
   ansible.builtin.lineinfile:
