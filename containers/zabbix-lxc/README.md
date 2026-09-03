@@ -9,6 +9,7 @@ This project builds the first Proxmox LXC workload in the homelab using OpenTofu
 - Hostname: `zabbix-lxc-01`
 - OS: Debian 13
 - Container type: unprivileged LXC
+- LXC nesting: enabled for Debian 13/systemd 257 compatibility
 - CPU: 2 cores
 - RAM: 4096 MB
 - Swap: 1024 MB
@@ -18,6 +19,20 @@ This project builds the first Proxmox LXC workload in the homelab using OpenTofu
 - DNS: `192.168.2.48`
 - MAC: `02:5A:42:00:02:01`
 - Start on Proxmox boot: yes
+
+## Debian 13 nesting requirement
+
+The Debian 13 template uses systemd 257. With nesting disabled, CT201 was created successfully but systemd entered a degraded state with failed standard mounts including `dev-mqueue.mount`, `run-lock.mount`, and `tmp.mount`.
+
+The container remains unprivileged, but OpenTofu explicitly enables:
+
+```hcl
+features {
+  nesting = true
+}
+```
+
+This is part of the declared container authority and must not be enabled only as an untracked manual Proxmox change.
 
 ## Application target
 
@@ -108,7 +123,7 @@ tofu plan -out=zabbix-lxc.tfplan
 
 Do not apply until the plan has been reviewed and the CT ID/MAC collision gates have passed.
 
-## Safety gates before apply
+## Safety gates before first apply
 
 On `PROXMOX`, prove:
 
@@ -135,22 +150,25 @@ pvesm list local --content vztmpl |
 
 ## Apply policy
 
-The saved plan is the only approved apply input:
+A reviewed saved plan is the only approved apply input:
 
 ```bash
-tofu apply zabbix-lxc.tfplan
+tofu apply <reviewed-plan-file>
 ```
 
-After apply, do not begin Zabbix installation until the LXC commissioning gates pass:
+After apply or an infrastructure change, do not begin Zabbix installation until the LXC commissioning gates pass:
 
 - CT201 exists and is running
 - unprivileged mode is confirmed
+- nesting configuration matches OpenTofu authority
+- systemd reports healthy after reboot
 - root filesystem is on `vm-ssd`
 - DHCP address is identified
 - SSH using the injected public key works
 - Debian 13 identity is confirmed
 - hostname is `zabbix-lxc-01`
 - DNS and Internet package access work
+- OpenTofu returns zero drift
 
 ## Provider
 
