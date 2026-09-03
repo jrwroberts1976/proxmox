@@ -121,6 +121,8 @@ The secondary SSD is not used as the only backup location. Proxmox backups must 
 
 The Proxmox host will become the main x86 compute platform. DNS remains independent on Raspberry Pi infrastructure, and IDS/security remains separate on `ids-01`.
 
+`TestServer` is the Proxmox **IaC control node and automation runner**. OpenTofu and Ansible are executed from TestServer to create and configure Proxmox workloads. It is not currently an enforced bastion/jump host; that would require separate network access controls. See [`docs/control-node-architecture.md`](docs/control-node-architecture.md) for the management architecture, ownership boundaries, provisioning flow, CT201 example, and future bastion option.
+
 Planned workloads include a Debian Docker VM, Home Assistant OS VM, and future test/lab VMs.
 
 ## Initial application-platform build sequence
@@ -155,6 +157,7 @@ Each component has its own validation, idempotence, acceptance and rollback gate
 
 ## Documentation
 
+- [`docs/control-node-architecture.md`](docs/control-node-architecture.md) — defines TestServer as the IaC control node/automation runner, distinguishes it from a bastion host, and documents the GitHub → TestServer → OpenTofu/Ansible → Proxmox/guest management flow.
 - [`docs/project-plan.md`](docs/project-plan.md) — full project plan, IaC model, Jenkins integration, migration gates, DNS resilience, backup/DR and acceptance criteria.
 - [`docs/installation.md`](docs/installation.md) — physical host installation, repository setup, networking, validation commands, SMART/thermal/virtualisation baselines and post-install gates.
 - [`docs/build-log.md`](docs/build-log.md) — chronological implementation record of changes performed on the live host.
