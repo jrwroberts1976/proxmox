@@ -3,5 +3,11 @@
   hosts: zabbix_servers
   become: true
   gather_facts: false
+
+  vars_prompt:
+    - name: zabbix_frontend_api_password
+      prompt: "Zabbix Admin password"
+      private: true
+
   roles:
     - role: zabbix_frontend_iac
