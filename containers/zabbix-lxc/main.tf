@@ -9,6 +9,14 @@ resource "proxmox_virtual_environment_container" "zabbix" {
   start_on_boot = true
   unprivileged  = true
 
+  # Debian 13 uses systemd 257. On Proxmox LXC, modern systemd requires
+  # cgroup nesting for its standard mount/service model to start cleanly.
+  # Keep the container unprivileged; enable only the nesting feature needed
+  # by the guest OS rather than converting the workload to privileged LXC.
+  features {
+    nesting = true
+  }
+
   cpu {
     cores = var.cpu_cores
   }
