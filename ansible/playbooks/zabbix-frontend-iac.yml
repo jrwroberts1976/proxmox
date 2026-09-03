@@ -4,10 +4,8 @@
   become: true
   gather_facts: false
 
-  vars_prompt:
-    - name: zabbix_frontend_api_password
-      prompt: "Zabbix Admin password"
-      private: true
+  vars:
+    zabbix_frontend_api_password: "{{ vault_zabbix_bootstrap_admin_password }}"
 
   roles:
     - role: zabbix_frontend_iac

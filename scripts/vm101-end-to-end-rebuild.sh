@@ -228,6 +228,7 @@ echo "===== HOSTNAME INPUT GATE ====="
 [[ "$VM_NAME" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$ ]] || \
     fail "invalid hostname: $VM_NAME"
 
+
 echo "hostname=$VM_NAME"
 
 pass "hostname input accepted"
@@ -961,6 +962,11 @@ run_ansible_playbook \
   "Zabbix Server" \
   "playbooks/zabbix-server.yml"
 
+run_ansible_playbook \
+  "Zabbix frontend BH22 Geomap" \
+  "playbooks/zabbix-frontend-iac.yml" \
+  0
+
 pass "VM101 Ansible service deployment"
 
 
@@ -1165,6 +1171,11 @@ run_ansible_playbook \
 run_ansible_playbook \
   "Zabbix Server idempotence" \
   "playbooks/zabbix-server.yml" \
+  1
+
+run_ansible_playbook \
+  "Zabbix frontend BH22 Geomap idempotence" \
+  "playbooks/zabbix-frontend-iac.yml" \
   1
 
 pass "all VM101 Ansible stages idempotent"
