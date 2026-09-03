@@ -8,6 +8,7 @@ zabbix_server_packages:
   - zabbix-agent2
   - postgresql-client
   - php8.4-pgsql
+  - locales
 zabbix_server_db_host: localhost
 zabbix_server_db_port: 5432
 zabbix_server_db_name: zabbix

@@ -1075,6 +1075,30 @@ printf '%s\n' "$PHP_MODULES" | grep -Fxq 'pdo_pgsql' || \
 pass "PHP PostgreSQL modules pgsql/pdo_pgsql loaded"
 
 
+echo
+echo "===== UK LOCALE VALIDATION ====="
+
+GENERATED_LOCALES="$("${VM_SSH[@]}" "locale -a")"
+
+printf '%s\n' "$GENERATED_LOCALES" |
+  grep -Fxq 'en_GB.utf8' ||
+    fail "en_GB.UTF-8 locale is not generated"
+
+pass "en_GB.UTF-8 locale generated"
+
+DEFAULT_LOCALE="$("${VM_SSH[@]}" "cat /etc/default/locale")"
+
+printf '%s\n' "$DEFAULT_LOCALE" |
+  grep -Fxq 'LANG=en_GB.UTF-8' ||
+    fail "default LANG is not en_GB.UTF-8"
+
+printf '%s\n' "$DEFAULT_LOCALE" |
+  grep -Fxq 'LANGUAGE=en_GB:en' ||
+    fail "default LANGUAGE is not en_GB:en"
+
+pass "UK default locale configured"
+
+
 FRONTEND_BODY="$WORK_ROOT/zabbix-frontend.html"
 
 FRONTEND_STATUS="$(
