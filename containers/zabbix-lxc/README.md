@@ -1,76 +1,106 @@
 # Zabbix LXC
 
-This project builds the first Proxmox LXC workload in the homelab using OpenTofu and Ansible.
+This project builds the first native Proxmox LXC application workload in the homelab using OpenTofu for infrastructure and Ansible for operating-system and application configuration.
 
-## Target
+## Current validated state — 3 September 2026
+
+CT201 is live and healthy.
+
+```text
+Proxmox
+└── CT201 — zabbix-lxc-01
+    ├── Debian 13
+    ├── PostgreSQL 17
+    ├── TimescaleDB
+    ├── Zabbix Server 7.0 LTS
+    ├── Zabbix Agent 2
+    ├── Nginx
+    ├── PHP 8.4 FPM
+    ├── Alloy
+    └── unattended-upgrades
+```
+
+Validated application endpoint:
+
+```text
+http://192.168.2.184:8080/
+```
+
+Validated state:
+
+```text
+CTID=201
+hostname=zabbix-lxc-01
+ipv4=192.168.2.184
+unprivileged=YES
+nesting=ENABLED
+systemd=HEALTHY
+failed_units=ZERO
+postgresql_version=17
+postgresql_cluster=ONLINE
+postgresql_scope=LOCALHOST_ONLY
+timescaledb_extension=ACTIVE
+zabbix_timescaledb_schema=CONVERTED
+vendor_hypertables=COMPLETE
+zabbix_server=ACTIVE
+zabbix_agent2=ACTIVE
+zabbix_frontend=ACTIVE
+nginx=ACTIVE
+php_fpm=ACTIVE
+alloy=HEALTHY
+ansible_idempotence=PASS
+```
+
+Pre-TimescaleDB-conversion rollback dump retained on CT201:
+
+```text
+/var/backups/zabbix/zabbix-pre-timescaledb-20260903-230800.dump
+```
+
+## Target identity
 
 - Proxmox node: `PROXMOX`
 - CT ID: `201`
 - Hostname: `zabbix-lxc-01`
+- IPv4: `192.168.2.184` (DHCP commissioning address)
 - OS: Debian 13
 - Container type: unprivileged LXC
-- LXC nesting: enabled for Debian 13/systemd 257 compatibility
+- LXC nesting: enabled
 - CPU: 2 cores
 - RAM: 4096 MB
 - Swap: 1024 MB
 - Root disk: 64 GB on `vm-ssd`
 - Bridge: `vmbr0`
-- Initial IPv4: DHCP
 - DNS: `192.168.2.48`
 - MAC: `02:5A:42:00:02:01`
 - Start on Proxmox boot: yes
 
-## Debian 13 nesting requirement
+## Ownership model
 
-The Debian 13 template uses systemd 257. With nesting disabled, CT201 was created successfully but systemd entered a degraded state with failed standard mounts including `dev-mqueue.mount`, `run-lock.mount`, and `tmp.mount`.
+```text
+OpenTofu
+  └── Proxmox CT201 infrastructure
 
-The container remains unprivileged, but OpenTofu explicitly enables:
+Ansible
+  └── Debian configuration and application stack
 
-```hcl
-features {
-  nesting = true
-}
+Git
+  └── configuration authority and change history
 ```
 
-This is part of the declared container authority and must not be enabled only as an untracked manual Proxmox change.
+TestServer is the IaC/control node. It runs OpenTofu and Ansible and connects to Proxmox and CT201.
 
-## Application target
+Do not install Docker directly on the Proxmox host and do not manually mutate persistent CT201 configuration when the change belongs in OpenTofu or Ansible.
 
-The LXC will later be configured through Ansible with the already-proven roles for:
+## OpenTofu root
 
-1. Linux baseline/security hardening
-2. unattended upgrades
-3. Alloy observability
-4. PostgreSQL 17
-5. TimescaleDB
-6. Nginx/PHP
-7. Zabbix Server 7.0 LTS
-8. Zabbix Agent 2
-9. Zabbix frontend IaC
-
-No application services are installed by this OpenTofu root.
-
-## State isolation
-
-This directory is a dedicated OpenTofu root and therefore owns a separate state from the earlier VM101 build.
-
-Do not run this configuration from the repository-level `tofu/` directory.
-
-Run from:
+Run CT201 infrastructure operations from:
 
 ```text
 /home/james/projects/proxmox/containers/zabbix-lxc
 ```
 
-The local state, plans and local variable files are excluded from Git.
-
-## Control host
-
-OpenTofu is run from `TestServer`, using:
-
-```text
-/home/james/projects/proxmox
-```
+This is a dedicated OpenTofu root with state isolated from the retired VM101 workload.
 
 Provider credentials are loaded from:
 
@@ -78,98 +108,121 @@ Provider credentials are loaded from:
 /home/james/.config/homelab-iac/proxmox.env
 ```
 
-The credential file must remain outside Git.
+The credential file remains outside Git.
 
-## Debian LXC template
-
-The shared Debian template is intentionally not owned by this workload's OpenTofu state.
-
-Required template:
+The project pins:
 
 ```text
-local:vztmpl/debian-13-standard_13.6-1_amd64.tar.zst
+bpg/proxmox = 0.111.1
 ```
 
-If it is not already cached, download it once on the Proxmox node as root:
+## Debian 13 nesting requirement
 
-```bash
-pveam download local debian-13-standard_13.6-1_amd64.tar.zst
+The Debian 13 template uses systemd 257. With nesting disabled, CT201 was created but standard mounts entered failed state.
+
+OpenTofu therefore owns:
+
+```hcl
+features {
+  nesting = true
+}
 ```
 
-Keeping the template outside CT201 state means destroying the Zabbix LXC cannot accidentally delete a platform template used by other containers.
+CT201 remains unprivileged. Nesting is a declared requirement and must not be removed merely to suppress drift.
 
-## Stage 1 — plan only
+## Completed deployment stages
 
-From `TestServer`:
+| Stage | Scope | State |
+|---|---|---|
+| 1 | LXC infrastructure and commissioning | COMPLETE |
+| 2 | Linux hardening and unattended upgrades | COMPLETE |
+| 3 | Alloy observability | COMPLETE |
+| 4 | PostgreSQL 17 | COMPLETE |
+| 5 | TimescaleDB extension/preload | COMPLETE |
+| 6A | Nginx baseline | COMPLETE |
+| 6B | Zabbix Server, Agent 2, PHP frontend and standard schema | COMPLETE |
+| 6C | Zabbix TimescaleDB conversion | COMPLETE |
+| Locale correction | en_GB + en_US availability for PHP/Zabbix | COMPLETE |
+| Frontend IaC / BH22 8QL Geomap | Admin/API credential prerequisite | DEFERRED |
 
-```bash
-cd /home/james/projects/proxmox
+## Database architecture
 
-git fetch origin --prune
-git switch feature/zabbix-lxc-foundation
-git pull --ff-only
+The accepted database order is:
 
-cd containers/zabbix-lxc
-
-set -a
-. /home/james/.config/homelab-iac/proxmox.env
-set +a
-
-tofu init
-tofu fmt -check
-tofu validate
-tofu plan -out=zabbix-lxc.tfplan
+```text
+PostgreSQL 17 database/user
+  -> TimescaleDB extension
+  -> standard Zabbix PostgreSQL schema
+  -> packaged Zabbix TimescaleDB conversion
+  -> vendor-declared hypertable verification
 ```
 
-Do not apply until the plan has been reviewed and the CT ID/MAC collision gates have passed.
+PostgreSQL remains bound to localhost only.
 
-## Safety gates before first apply
+The TimescaleDB conversion role reads the expected hypertables from the installed Zabbix vendor schema instead of hard-coding a release-specific list.
 
-On `PROXMOX`, prove:
+## Locale requirement
 
-```bash
-pct status 201
+Zabbix requires `en_US.UTF-8` to be available to the PHP frontend even when the server uses UK English.
+
+Ansible manages both:
+
+```text
+en_GB.UTF-8
+en_US.UTF-8
 ```
 
-must report that CT 201 does not exist.
+The host default remains:
 
-The MAC must not already occur in active Proxmox guest configuration:
-
-```bash
-grep -RFi '02:5A:42:00:02:01' /etc/pve 2>/dev/null
+```text
+LANG=en_GB.UTF-8
+LANGUAGE=en_GB:en
 ```
 
-Expected result: no output.
+Do not fix missing Zabbix locales manually. Re-run the `zabbix_server` role and validate PHP locale availability.
 
-Also prove the required template exists:
+## Frontend IaC target
 
-```bash
-pvesm list local --content vztmpl |
-  grep -F 'debian-13-standard_13.6-1_amd64.tar.zst'
+The desired Geomap authority is already in Git:
+
+```text
+Dashboard: Global view
+Host:      Zabbix server
+Location:  BH22 8QL, West Parley, Dorset, UK
+Latitude:  50.79039
+Longitude: -1.890218
+Zoom:      15
 ```
 
-## Apply policy
+Application of that state is deferred until the Zabbix `Admin` API credential is recovered/rotated and stored securely in Ansible Vault.
 
-A reviewed saved plan is the only approved apply input:
+Current diagnostic evidence on 3 September 2026:
 
-```bash
-tofu apply <reviewed-plan-file>
+```text
+Admin user exists
+failed API login attempts observed: 4
+source: 192.168.2.220 (TestServer)
 ```
 
-After apply or an infrastructure change, do not begin Zabbix installation until the LXC commissioning gates pass:
+Do not continue guessing credentials. The next safe action is controlled Admin credential recovery/rotation, Vault storage, API login proof, then frontend-IaC application and a `changed=0` second pass.
 
-- CT201 exists and is running
-- unprivileged mode is confirmed
-- nesting configuration matches OpenTofu authority
-- systemd reports healthy after reboot
-- root filesystem is on `vm-ssd`
-- DHCP address is identified
-- SSH using the injected public key works
-- Debian 13 identity is confirmed
-- hostname is `zabbix-lxc-01`
-- DNS and Internet package access work
-- OpenTofu returns zero drift
+## Acceptance gates
 
-## Provider
+A completed CT201 change should preserve:
 
-This project pins `bpg/proxmox` `0.111.1`, matching the existing Proxmox repository authority.
+```text
+systemd=running
+failed_units=ZERO
+postgresql=active
+zabbix-server=active
+zabbix-agent2=active
+nginx=active
+php8.4-fpm=active
+alloy=active
+frontend HTTP=healthy
+Ansible second pass changed=0
+OpenTofu plan exit code=0
+repository clean
+```
+
+Secrets must never be printed, committed or left in plaintext files in the repository.
