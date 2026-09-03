@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-REPO="/home/james/projects/proxmox"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+REPO="$(cd -- "$SCRIPT_DIR/.." && pwd)"
+
 TOFU_DIR="$REPO/tofu"
 ANSIBLE_DIR="$REPO/ansible"
 ANSIBLE_INVENTORY="$ANSIBLE_DIR/inventories/vm101/hosts.yml"
@@ -9,7 +11,7 @@ VAULT_PASS_FILE="/home/james/.config/homelab-iac/ansible-vault-password"
 ENV_FILE="/home/james/.config/homelab-iac/proxmox.env"
 STATE_BACKUP_DIR="/home/james/tofu-state-backups"
 
-EXPECTED_BRANCH="main"
+EXPECTED_BRANCH="${VM101_EXPECTED_BRANCH:-main}"
 
 RESOURCE="proxmox_virtual_environment_vm.app_platform"
 
@@ -1060,11 +1062,26 @@ pass "Nginx configuration valid"
 pass "Zabbix listeners 8080/10051/10050"
 
 
+PHP_MODULES="$(
+    "${VM_SSH[@]}" "php -m"
+)"
+
+printf '%s\n' "$PHP_MODULES" | grep -Fxq 'pgsql' || \
+    fail "PHP PostgreSQL module pgsql is not loaded"
+
+printf '%s\n' "$PHP_MODULES" | grep -Fxq 'pdo_pgsql' || \
+    fail "PHP PostgreSQL module pdo_pgsql is not loaded"
+
+pass "PHP PostgreSQL modules pgsql/pdo_pgsql loaded"
+
+
+FRONTEND_BODY="$WORK_ROOT/zabbix-frontend.html"
+
 FRONTEND_STATUS="$(
     curl \
       --silent \
       --show-error \
-      --output /dev/null \
+      --output "$FRONTEND_BODY" \
       --write-out '%{http_code}' \
       --max-time 10 \
       "http://$VM_IP:8080/"
@@ -1074,6 +1091,16 @@ FRONTEND_STATUS="$(
     fail "Zabbix frontend HTTP status is $FRONTEND_STATUS"
 
 pass "Zabbix frontend HTTP 200"
+
+
+if grep -Fq \
+  'DB type "POSTGRESQL" is not supported by current setup' \
+  "$FRONTEND_BODY"
+then
+    fail "Zabbix frontend still reports PostgreSQL PHP support missing"
+fi
+
+pass "Zabbix frontend PostgreSQL support accepted"
 
 pass "VM101 live platform validation"
 
