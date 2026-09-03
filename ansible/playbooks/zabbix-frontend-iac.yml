@@ -1,0 +1,7 @@
+---
+- name: Configure Zabbix frontend state
+  hosts: zabbix_servers
+  become: true
+  gather_facts: false
+  roles:
+    - role: zabbix_frontend_iac
