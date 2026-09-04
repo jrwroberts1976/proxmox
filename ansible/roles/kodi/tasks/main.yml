@@ -71,12 +71,23 @@
 - name: Flush Kodi handlers before validation
   ansible.builtin.meta: flush_handlers
 
-- name: Verify Kodi service is active
+- name: Wait for Kodi service to become active
   ansible.builtin.command:
     cmd: "systemctl is-active {{ kodi_service_name }}"
   register: kodi_service_active
   changed_when: false
-  failed_when: kodi_service_active.stdout.strip() != 'active'
+  failed_when: false
+  retries: 12
+  delay: 2
+  until: kodi_service_active.stdout.strip() == 'active'
+
+- name: Require Kodi service to be active
+  ansible.builtin.assert:
+    that:
+      - kodi_service_active.stdout.strip() == 'active'
+    fail_msg: >-
+      Kodi service did not become active. Final state:
+      {{ kodi_service_active.stdout | default('unknown') }}.
 
 - name: Verify Kodi service is enabled
   ansible.builtin.command:
