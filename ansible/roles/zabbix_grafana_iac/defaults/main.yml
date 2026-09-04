@@ -1,0 +1,20 @@
+---
+zabbix_grafana_api_url: "http://127.0.0.1:8080/api_jsonrpc.php"
+zabbix_grafana_admin_username: "Admin"
+zabbix_grafana_admin_password: ""
+
+zabbix_grafana_role_name: "Grafana API Read Only"
+zabbix_grafana_user_group_name: "Grafana Read Only"
+zabbix_grafana_username: "grafana-zabbix"
+zabbix_grafana_token_name: "grafana-datasource"
+
+zabbix_grafana_host_groups:
+  - "Zabbix servers"
+  - "Linux servers"
+  - "Infrastructure/Proxmox"
+
+zabbix_grafana_sops_worktree: "/var/tmp/docker-env-zabbix-monitoring"
+zabbix_grafana_sops_config: "{{ zabbix_grafana_sops_worktree }}/.sops.yaml"
+zabbix_grafana_sops_secret: "{{ zabbix_grafana_sops_worktree }}/secrets/ids-01/grafana-zabbix.sops.env"
+zabbix_grafana_token_staging: "/tmp/zabbix-grafana-api-token"
+zabbix_grafana_state_dir: "/var/lib/homelab-zabbix-grafana-iac"
