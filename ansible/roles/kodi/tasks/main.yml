@@ -51,7 +51,7 @@
       StandardError=journal
       Environment=HOME={{ kodi_home }}
       Environment=DISPLAY={{ kodi_display }}
-      ExecStart=/usr/bin/xinit /usr/bin/kodi-standalone -- {{ kodi_display }} {{ kodi_tty }} -keeptty -nolisten tcp
+      ExecStart=/usr/bin/xinit /usr/bin/kodi-standalone -- {{ kodi_display }} {{ kodi_vt }} -keeptty -nolisten tcp
       Restart=on-failure
       RestartSec={{ kodi_restart_sec }}
       KillMode=control-group
