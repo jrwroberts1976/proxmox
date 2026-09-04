@@ -16,6 +16,22 @@
     fail_msg: "Zabbix frontend IaC requires valid API credentials, dashboard/host names and Geomap coordinates."
   no_log: true
 
+- name: Create Zabbix frontend IaC state directory
+  ansible.builtin.file:
+    path: "{{ zabbix_frontend_iac_state_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0750"
+
+- name: Install Zabbix Admin credential helper
+  ansible.builtin.copy:
+    src: zabbix_admin_credential_iac.py
+    dest: /usr/local/libexec/homelab-zabbix-admin-credential-iac
+    owner: root
+    group: root
+    mode: "0755"
+
 - name: Install Zabbix frontend IaC helper
   ansible.builtin.copy:
     src: zabbix_frontend_iac.py
@@ -23,6 +39,90 @@
     owner: root
     group: root
     mode: "0755"
+
+- name: Check Zabbix Admin bootstrap marker
+  ansible.builtin.stat:
+    path: "{{ zabbix_frontend_iac_state_dir }}/admin-bootstrap-v1"
+  register: zabbix_admin_bootstrap_marker
+
+- name: Bootstrap Zabbix Admin credential when not yet completed
+  when: not zabbix_admin_bootstrap_marker.stat.exists
+  block:
+    - name: Apply documented Zabbix Admin recovery password
+      ansible.builtin.command:
+        argv:
+          - psql
+          - -d
+          - zabbix
+          - -v
+          - ON_ERROR_STOP=1
+          - -c
+          - >-
+            UPDATE users
+               SET passwd = '$2a$10$ZXIvHAEP2ZM.dLXTm6uPHOMVlARXX7cqjbhM6Fn0cANzkCQBWpMrS',
+                   attempt_failed = 0,
+                   attempt_clock = 0,
+                   attempt_ip = ''
+             WHERE username = 'Admin';
+      become_user: postgres
+      vars:
+        ansible_become: true
+        ansible_become_method: su
+        ansible_become_flags: "-s /bin/sh"
+      register: zabbix_admin_recovery
+      changed_when: "'UPDATE 1' in zabbix_admin_recovery.stdout"
+      failed_when: >-
+        zabbix_admin_recovery.rc != 0 or
+        'UPDATE 1' not in zabbix_admin_recovery.stdout
+
+    - name: Rotate recovered Admin credential to Vault authority
+      ansible.builtin.command:
+        argv:
+          - /usr/local/libexec/homelab-zabbix-admin-credential-iac
+          - --api-url
+          - "{{ zabbix_frontend_api_url }}"
+          - --username
+          - "{{ zabbix_frontend_api_username }}"
+          - --mode
+          - rotate
+          - --status-file
+          - "{{ zabbix_frontend_iac_state_dir }}/admin-bootstrap-status"
+      environment:
+        ZABBIX_RECOVERY_PASSWORD: "zabbix"
+        ZABBIX_DESIRED_PASSWORD: "{{ zabbix_frontend_api_password }}"
+      register: zabbix_admin_rotate
+      changed_when: zabbix_admin_rotate.rc == 2
+      failed_when: zabbix_admin_rotate.rc != 2
+      no_log: true
+
+    - name: Record completed Zabbix Admin bootstrap
+      ansible.builtin.file:
+        path: "{{ zabbix_frontend_iac_state_dir }}/admin-bootstrap-v1"
+        state: touch
+        owner: root
+        group: root
+        mode: "0600"
+        modification_time: preserve
+        access_time: preserve
+
+- name: Verify Vault-backed Zabbix Admin credential
+  ansible.builtin.command:
+    argv:
+      - /usr/local/libexec/homelab-zabbix-admin-credential-iac
+      - --api-url
+      - "{{ zabbix_frontend_api_url }}"
+      - --username
+      - "{{ zabbix_frontend_api_username }}"
+      - --mode
+      - verify
+      - --status-file
+      - "{{ zabbix_frontend_iac_state_dir }}/admin-bootstrap-status"
+  environment:
+    ZABBIX_DESIRED_PASSWORD: "{{ zabbix_frontend_api_password }}"
+  register: zabbix_admin_verify
+  changed_when: false
+  failed_when: zabbix_admin_verify.rc != 0
+  no_log: true
 
 - name: Apply Zabbix Geomap and host inventory authority
   ansible.builtin.command:

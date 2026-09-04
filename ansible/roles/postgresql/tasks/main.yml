@@ -63,6 +63,10 @@
     role_attr_flags: "{{ item.role_attr_flags | default('LOGIN') }}"
     state: present
   become_user: postgres
+  vars:
+    ansible_become: true
+    ansible_become_method: su
+    ansible_become_flags: "-s /bin/sh"
   loop: "{{ postgresql_users }}"
   loop_control:
     label: "{{ item.name }}"
@@ -73,8 +77,13 @@
     name: "{{ item.name }}"
     owner: "{{ item.owner | default(omit) }}"
     encoding: "{{ item.encoding | default('UTF8') }}"
+    template: "{{ item.template | default('template0') }}"
     state: present
   become_user: postgres
+  vars:
+    ansible_become: true
+    ansible_become_method: su
+    ansible_become_flags: "-s /bin/sh"
   loop: "{{ postgresql_databases }}"
   loop_control:
     label: "{{ item.name }}"

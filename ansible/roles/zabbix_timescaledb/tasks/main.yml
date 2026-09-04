@@ -1,0 +1,163 @@
+---
+- name: Verify Zabbix TimescaleDB role platform
+  ansible.builtin.assert:
+    that:
+      - ansible_distribution == 'Debian'
+      - ansible_distribution_major_version | int >= 13
+      - zabbix_timescaledb_database | length > 0
+    fail_msg: "The Zabbix TimescaleDB role currently targets Debian 13+ and requires a database name."
+
+- name: Check Zabbix TimescaleDB schema script
+  ansible.builtin.stat:
+    path: "{{ zabbix_timescaledb_schema_script }}"
+  register: zabbix_timescaledb_schema_file
+
+- name: Require packaged Zabbix TimescaleDB schema script
+  ansible.builtin.assert:
+    that:
+      - zabbix_timescaledb_schema_file.stat.exists
+      - zabbix_timescaledb_schema_file.stat.isreg
+    fail_msg: "The packaged Zabbix TimescaleDB schema script is missing."
+
+- name: Confirm standard Zabbix schema exists before TimescaleDB conversion
+  community.postgresql.postgresql_query:
+    db: "{{ zabbix_timescaledb_database }}"
+    query: "SELECT to_regclass('public.users') IS NOT NULL AS schema_ready;"
+  become_user: postgres
+  vars:
+    ansible_become: true
+    ansible_become_method: su
+    ansible_become_flags: "-s /bin/sh"
+  register: zabbix_timescaledb_standard_schema
+  changed_when: false
+
+- name: Require standard Zabbix schema before TimescaleDB conversion
+  ansible.builtin.assert:
+    that:
+      - zabbix_timescaledb_standard_schema.query_result[0].schema_ready | bool
+    fail_msg: "The standard Zabbix PostgreSQL schema must exist before TimescaleDB conversion."
+
+- name: Determine vendor-declared TimescaleDB hypertables still missing
+  ansible.builtin.shell:
+    cmd: |
+      set -euo pipefail
+      expected="$(
+        sed -n "s/.*create_hypertable('\([^']*\)'.*/\1/p" \
+          {{ zabbix_timescaledb_schema_script | quote }} |
+        sort -u
+      )"
+      actual="$(
+        psql -d {{ zabbix_timescaledb_database | quote }} -Atc \
+          "SELECT hypertable_name
+             FROM timescaledb_information.hypertables
+            WHERE hypertable_schema='public'
+            ORDER BY hypertable_name;"
+      )"
+      comm -23 \
+        <(printf '%s\n' "$expected" | sed '/^$/d' | sort -u) \
+        <(printf '%s\n' "$actual" | sed '/^$/d' | sort -u)
+    executable: /bin/bash
+  become_user: postgres
+  vars:
+    ansible_become: true
+    ansible_become_method: su
+    ansible_become_flags: "-s /bin/sh"
+  register: zabbix_timescaledb_missing_before
+  changed_when: false
+
+- name: Report TimescaleDB conversion requirement
+  ansible.builtin.debug:
+    msg: >-
+      Missing vendor-declared hypertables: {{
+        zabbix_timescaledb_missing_before.stdout_lines | default([]) | join(', ')
+        if (zabbix_timescaledb_missing_before.stdout | trim | length) > 0
+        else 'none'
+      }}
+
+- name: Apply packaged Zabbix TimescaleDB schema when required
+  when: zabbix_timescaledb_missing_before.stdout | trim | length > 0
+  block:
+    - name: Stop Zabbix server and frontend for TimescaleDB migration
+      ansible.builtin.service:
+        name: "{{ item }}"
+        state: stopped
+      loop: "{{ zabbix_timescaledb_managed_services }}"
+
+    - name: Run packaged Zabbix TimescaleDB schema
+      ansible.builtin.command:
+        argv:
+          - psql
+          - -v
+          - ON_ERROR_STOP=1
+          - -d
+          - "{{ zabbix_timescaledb_database }}"
+          - -f
+          - "{{ zabbix_timescaledb_schema_script }}"
+      become_user: zabbix
+      vars:
+        ansible_become: true
+        ansible_become_method: su
+        ansible_become_flags: "-s /bin/sh"
+      changed_when: true
+  always:
+    - name: Ensure Zabbix server and frontend are running after migration attempt
+      ansible.builtin.service:
+        name: "{{ item }}"
+        state: started
+        enabled: true
+      loop: "{{ zabbix_timescaledb_managed_services }}"
+
+- name: Recheck vendor-declared TimescaleDB hypertables
+  ansible.builtin.shell:
+    cmd: |
+      set -euo pipefail
+      expected="$(
+        sed -n "s/.*create_hypertable('\([^']*\)'.*/\1/p" \
+          {{ zabbix_timescaledb_schema_script | quote }} |
+        sort -u
+      )"
+      actual="$(
+        psql -d {{ zabbix_timescaledb_database | quote }} -Atc \
+          "SELECT hypertable_name
+             FROM timescaledb_information.hypertables
+            WHERE hypertable_schema='public'
+            ORDER BY hypertable_name;"
+      )"
+      comm -23 \
+        <(printf '%s\n' "$expected" | sed '/^$/d' | sort -u) \
+        <(printf '%s\n' "$actual" | sed '/^$/d' | sort -u)
+    executable: /bin/bash
+  become_user: postgres
+  vars:
+    ansible_become: true
+    ansible_become_method: su
+    ansible_become_flags: "-s /bin/sh"
+  register: zabbix_timescaledb_missing_after
+  changed_when: false
+
+- name: Require complete Zabbix TimescaleDB conversion
+  ansible.builtin.assert:
+    that:
+      - zabbix_timescaledb_missing_after.stdout | trim | length == 0
+    fail_msg: >-
+      Zabbix TimescaleDB conversion is incomplete. Missing hypertables: {{
+        zabbix_timescaledb_missing_after.stdout_lines | default([]) | join(', ')
+      }}
+
+- name: Confirm Zabbix database is marked as TimescaleDB-backed
+  community.postgresql.postgresql_query:
+    db: "{{ zabbix_timescaledb_database }}"
+    query: "SELECT db_extension FROM config;"
+  become_user: postgres
+  vars:
+    ansible_become: true
+    ansible_become_method: su
+    ansible_become_flags: "-s /bin/sh"
+  register: zabbix_timescaledb_config_state
+  changed_when: false
+
+- name: Require Zabbix TimescaleDB database marker
+  ansible.builtin.assert:
+    that:
+      - zabbix_timescaledb_config_state.query_result[0].db_extension == 'timescaledb'
+    fail_msg: "Zabbix database is not marked as TimescaleDB-backed after schema conversion."

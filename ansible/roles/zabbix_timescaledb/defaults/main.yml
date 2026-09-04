@@ -1,0 +1,7 @@
+---
+zabbix_timescaledb_database: zabbix
+zabbix_timescaledb_schema_script: /usr/share/zabbix-sql-scripts/postgresql/timescaledb/schema.sql
+zabbix_timescaledb_managed_services:
+  - zabbix-server
+  - nginx
+  - php8.4-fpm
