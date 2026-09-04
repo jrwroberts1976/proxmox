@@ -1,0 +1,168 @@
+---
+- name: Require Debian-family host
+  ansible.builtin.assert:
+    that:
+      - ansible_os_family == 'Debian'
+    fail_msg: This role supports Debian-family hosts only.
+
+- name: Require Kodi runtime user
+  ansible.builtin.getent:
+    database: passwd
+    key: "{{ kodi_user }}"
+
+- name: Install Kodi GBM session dependencies
+  ansible.builtin.apt:
+    name: "{{ kodi_packages }}"
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Require packaged Kodi GBM session
+  ansible.builtin.stat:
+    path: "{{ kodi_session_file }}"
+  register: kodi_gbm_session
+
+- name: Assert packaged Kodi GBM session exists
+  ansible.builtin.assert:
+    that:
+      - kodi_gbm_session.stat.exists
+      - kodi_gbm_session.stat.isreg
+    fail_msg: >-
+      Expected packaged Kodi GBM session {{ kodi_session_file }} is missing.
+
+- name: Ensure Kodi runtime user has media device access
+  ansible.builtin.user:
+    name: "{{ kodi_user }}"
+    groups:
+      - audio
+      - video
+      - render
+      - input
+    append: true
+
+- name: Inspect legacy custom Kodi service
+  ansible.builtin.stat:
+    path: "{{ kodi_legacy_service_file }}"
+  register: kodi_legacy_service
+
+- name: Stop and disable legacy custom Kodi service
+  ansible.builtin.systemd_service:
+    name: kodi.service
+    state: stopped
+    enabled: false
+  when: kodi_legacy_service.stat.exists
+
+- name: Remove legacy custom Kodi service
+  ansible.builtin.file:
+    path: "{{ kodi_legacy_service_file }}"
+    state: absent
+  register: kodi_legacy_service_removed
+
+- name: Remove temporary Xorg wrapper configuration
+  ansible.builtin.file:
+    path: "{{ kodi_xwrapper_config_file }}"
+    state: absent
+
+- name: Reload systemd after legacy Kodi service removal
+  ansible.builtin.systemd_service:
+    daemon_reload: true
+  when: kodi_legacy_service_removed.changed
+
+- name: Remove ineffective LightDM Kodi drop-in
+  ansible.builtin.file:
+    path: "{{ kodi_lightdm_dropin_file }}"
+    state: absent
+  notify: Restart LightDM
+
+- name: Configure authoritative LightDM user session
+  ansible.builtin.lineinfile:
+    path: "{{ kodi_lightdm_config_file }}"
+    regexp: '^user-session='
+    line: "user-session={{ kodi_session }}"
+    insertafter: '^\[Seat:\*\]$'
+  notify: Restart LightDM
+
+- name: Configure authoritative LightDM autologin user
+  ansible.builtin.lineinfile:
+    path: "{{ kodi_lightdm_config_file }}"
+    regexp: '^autologin-user='
+    line: "autologin-user={{ kodi_user }}"
+    insertafter: '^\[Seat:\*\]$'
+  notify: Restart LightDM
+
+- name: Configure authoritative LightDM autologin timeout
+  ansible.builtin.lineinfile:
+    path: "{{ kodi_lightdm_config_file }}"
+    regexp: '^autologin-user-timeout='
+    line: 'autologin-user-timeout=0'
+    insertafter: '^\[Seat:\*\]$'
+  notify: Restart LightDM
+
+- name: Configure authoritative LightDM autologin session
+  ansible.builtin.lineinfile:
+    path: "{{ kodi_lightdm_config_file }}"
+    regexp: '^autologin-session='
+    line: "autologin-session={{ kodi_session }}"
+    insertafter: '^\[Seat:\*\]$'
+  notify: Restart LightDM
+
+- name: Ensure LightDM is enabled and running
+  ansible.builtin.systemd_service:
+    name: "{{ kodi_display_manager_service }}"
+    enabled: true
+    state: started
+    daemon_reload: true
+
+- name: Flush LightDM handler before validation
+  ansible.builtin.meta: flush_handlers
+
+- name: Wait for Kodi process to start through GBM session
+  ansible.builtin.command:
+    cmd: "pgrep -a -u {{ kodi_user }} kodi.bin"
+  register: kodi_process
+  changed_when: false
+  failed_when: false
+  retries: 20
+  delay: 2
+  until: kodi_process.rc == 0
+
+- name: Require Kodi process to be running
+  ansible.builtin.assert:
+    that:
+      - kodi_process.rc == 0
+    fail_msg: >-
+      Kodi did not start through the LightDM {{ kodi_session }} session.
+
+- name: Verify LightDM service is active
+  ansible.builtin.command:
+    cmd: "systemctl is-active {{ kodi_display_manager_service }}"
+  register: kodi_lightdm_active
+  changed_when: false
+  failed_when: kodi_lightdm_active.stdout.strip() != 'active'
+
+- name: Verify LightDM service is enabled
+  ansible.builtin.command:
+    cmd: "systemctl is-enabled {{ kodi_display_manager_service }}"
+  register: kodi_lightdm_enabled
+  changed_when: false
+  failed_when: kodi_lightdm_enabled.stdout.strip() not in ['enabled', 'static']
+
+- name: Verify authoritative LightDM Kodi user session
+  ansible.builtin.command:
+    cmd: "grep -F 'user-session={{ kodi_session }}' {{ kodi_lightdm_config_file }}"
+  changed_when: false
+
+- name: Verify authoritative LightDM Kodi autologin session
+  ansible.builtin.command:
+    cmd: "grep -F 'autologin-session={{ kodi_session }}' {{ kodi_lightdm_config_file }}"
+  changed_when: false
+
+- name: Verify Kodi is using GBM session command
+  ansible.builtin.shell:
+    cmd: >-
+      set -o pipefail &&
+      ps -eo user,args |
+      grep -E '^{{ kodi_user }}[[:space:]].*(kodi-standalone|kodi\.bin)' |
+      grep -F -- '--windowing=gbm'
+    executable: /bin/bash
+  changed_when: false

@@ -32,3 +32,12 @@ zabbix_managed_hosts:
       - "Linux servers"
     templates:
       - "Linux by Zabbix agent"
+
+  - host: "media-01"
+    name: "media-01"
+    ip: "192.168.2.195"
+    port: "10050"
+    groups:
+      - "Linux servers"
+    templates:
+      - "Linux by Zabbix agent"

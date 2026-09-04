@@ -1,0 +1,7 @@
+---
+- name: Configure media host networking
+  hosts: media_hosts
+  become: true
+  gather_facts: true
+  roles:
+    - role: media_network

@@ -1,0 +1,16 @@
+---
+ansible_user: ansible
+ansible_ssh_private_key_file: ~/.ssh/proxmox-automation
+ansible_become: true
+ansible_become_method: sudo
+
+managed_linux_timezone: Europe/London
+
+media_network_primary_interface: eth0
+media_network_expected_ipv4: 192.168.2.195
+media_network_gateway: 192.168.2.1
+media_network_connection_name: netplan-eth0
+media_network_route_metric: 100
+media_network_wifi_interface: wlan0
+media_network_wifi_connection_name: netplan-wlan0-home-wifi
+media_network_transient_netplan_file: /etc/netplan/10-media-host-ethernet.yaml

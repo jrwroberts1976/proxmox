@@ -1,0 +1,138 @@
+---
+- name: Assert media network variables are safe
+  ansible.builtin.assert:
+    that:
+      - media_network_primary_interface == "eth0"
+      - media_network_wifi_interface == "wlan0"
+      - media_network_expected_ipv4 is match('^[0-9]{1,3}(\.[0-9]{1,3}){3}$')
+      - media_network_gateway is match('^[0-9]{1,3}(\.[0-9]{1,3}){3}$')
+      - media_network_route_metric | int > 0
+      - media_network_connection_name | length > 0
+      - media_network_wifi_connection_name | length > 0
+      - media_network_transient_netplan_file.startswith('/etc/netplan/')
+    fail_msg: "media_network variables failed safety validation"
+
+- name: Verify current Ethernet management path before changes
+  ansible.builtin.shell: |
+    set -euo pipefail
+    ip -4 -o addr show dev {{ media_network_primary_interface | quote }} | grep -F ' {{ media_network_expected_ipv4 }}/'
+    ip route show default | grep -F 'via {{ media_network_gateway }} dev {{ media_network_primary_interface }}'
+    nmcli -t -f NAME,TYPE,DEVICE connection show --active | grep -F '{{ media_network_connection_name }}:802-3-ethernet:{{ media_network_primary_interface }}'
+  args:
+    executable: /bin/bash
+  changed_when: false
+
+- name: Reconcile persistent Ethernet NetworkManager profile
+  ansible.builtin.shell: |
+    set -euo pipefail
+
+    connection={{ media_network_connection_name | quote }}
+    metric={{ media_network_route_metric | int }}
+
+    nmcli -t -f NAME connection show | grep -Fxq "$connection"
+
+    if [ "$(nmcli -g connection.autoconnect connection show "$connection")" = 'yes' ] && \
+       [ "$(nmcli -g ipv4.method connection show "$connection")" = 'auto' ] && \
+       [ "$(nmcli -g ipv4.route-metric connection show "$connection")" = "$metric" ] && \
+       [ "$(nmcli -g ipv6.method connection show "$connection")" = 'auto' ] && \
+       [ "$(nmcli -g ipv6.route-metric connection show "$connection")" = "$metric" ]; then
+      echo 'changed=0'
+      exit 0
+    fi
+
+    nmcli connection modify "$connection" \
+      connection.autoconnect yes \
+      ipv4.method auto \
+      ipv4.route-metric "$metric" \
+      ipv6.method auto \
+      ipv6.route-metric "$metric"
+
+    nmcli device reapply {{ media_network_primary_interface | quote }}
+    echo 'changed=1'
+  args:
+    executable: /bin/bash
+  register: media_network_ethernet_reconcile
+  changed_when: "'changed=1' in media_network_ethernet_reconcile.stdout"
+
+- name: Remove obsolete transient Netplan authority
+  ansible.builtin.file:
+    path: "{{ media_network_transient_netplan_file }}"
+    state: absent
+
+- name: Remove managed Wi-Fi connection profile if present
+  ansible.builtin.shell: |
+    set -euo pipefail
+    connection={{ media_network_wifi_connection_name | quote }}
+
+    if nmcli -t -f NAME connection show | grep -Fxq "$connection"; then
+      nmcli connection delete "$connection"
+      echo 'changed=1'
+    else
+      echo 'changed=0'
+    fi
+  args:
+    executable: /bin/bash
+  register: media_network_wifi_profile_reconcile
+  changed_when: "'changed=1' in media_network_wifi_profile_reconcile.stdout"
+
+- name: Install persistent Wi-Fi disable service
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/media-disable-wifi.service
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=Disable Wi-Fi on managed media host
+      After=NetworkManager.service
+      Wants=NetworkManager.service
+
+      [Service]
+      Type=oneshot
+      ExecStart=/usr/bin/nmcli radio wifi off
+      RemainAfterExit=yes
+
+      [Install]
+      WantedBy=multi-user.target
+  register: media_network_wifi_service_unit
+
+- name: Reload systemd when Wi-Fi service unit changes
+  ansible.builtin.systemd_service:
+    daemon_reload: true
+  when: media_network_wifi_service_unit.changed
+
+- name: Enable and enforce Wi-Fi disabled state
+  ansible.builtin.systemd_service:
+    name: media-disable-wifi.service
+    enabled: true
+    state: started
+
+- name: Verify final managed network state
+  ansible.builtin.shell: |
+    set -euo pipefail
+
+    ip -4 -o addr show dev {{ media_network_primary_interface | quote }} | grep -F ' {{ media_network_expected_ipv4 }}/'
+    ip route show default | grep -F 'via {{ media_network_gateway }} dev {{ media_network_primary_interface }}'
+
+    test "$(nmcli -g connection.autoconnect connection show {{ media_network_connection_name | quote }})" = 'yes'
+    test "$(nmcli -g ipv4.method connection show {{ media_network_connection_name | quote }})" = 'auto'
+    test "$(nmcli -g ipv4.route-metric connection show {{ media_network_connection_name | quote }})" = '{{ media_network_route_metric }}'
+    test "$(nmcli -g ipv6.method connection show {{ media_network_connection_name | quote }})" = 'auto'
+    test "$(nmcli -g ipv6.route-metric connection show {{ media_network_connection_name | quote }})" = '{{ media_network_route_metric }}'
+
+    if ip -4 -o addr show dev {{ media_network_wifi_interface | quote }} | grep -q ' inet '; then
+      echo 'Wi-Fi still has an IPv4 address' >&2
+      exit 1
+    fi
+
+    if nmcli -t -f NAME connection show | grep -Fxq {{ media_network_wifi_connection_name | quote }}; then
+      echo 'Wi-Fi connection profile still exists' >&2
+      exit 1
+    fi
+
+    test "$(nmcli -t -f WIFI general)" = 'disabled'
+    systemctl is-enabled --quiet media-disable-wifi.service
+    systemctl is-active --quiet media-disable-wifi.service
+  args:
+    executable: /bin/bash
+  changed_when: false

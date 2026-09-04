@@ -1,0 +1,80 @@
+---
+- name: Bootstrap managed Linux host
+  hosts: all
+  become: true
+  gather_facts: true
+
+  vars:
+    bootstrap_ansible_user: ansible
+    bootstrap_public_key_file: "{{ lookup('env', 'HOME') }}/.ssh/proxmox-automation.pub"
+
+  pre_tasks:
+    - name: Require Debian 13 or newer
+      ansible.builtin.assert:
+        that:
+          - ansible_facts.os_family == 'Debian'
+          - ansible_facts.distribution_major_version | int >= 13
+        fail_msg: "Bootstrap is approved only for Debian 13 or newer managed hosts."
+
+    - name: Require controller automation public key
+      ansible.builtin.assert:
+        that:
+          - lookup('ansible.builtin.file', bootstrap_public_key_file, errors='ignore') | length > 0
+        fail_msg: "Missing controller public key: {{ bootstrap_public_key_file }}"
+
+  tasks:
+    - name: Ensure sudo is installed
+      ansible.builtin.package:
+        name: sudo
+        state: present
+
+    - name: Create dedicated Ansible account
+      ansible.builtin.user:
+        name: "{{ bootstrap_ansible_user }}"
+        shell: /bin/bash
+        create_home: true
+        state: present
+
+    - name: Create Ansible SSH directory
+      ansible.builtin.file:
+        path: "/home/{{ bootstrap_ansible_user }}/.ssh"
+        state: directory
+        owner: "{{ bootstrap_ansible_user }}"
+        group: "{{ bootstrap_ansible_user }}"
+        mode: '0700'
+
+    - name: Install controller automation public key
+      ansible.builtin.copy:
+        content: "{{ lookup('ansible.builtin.file', bootstrap_public_key_file) | trim }}\n"
+        dest: "/home/{{ bootstrap_ansible_user }}/.ssh/authorized_keys"
+        owner: "{{ bootstrap_ansible_user }}"
+        group: "{{ bootstrap_ansible_user }}"
+        mode: '0600'
+
+    - name: Install passwordless sudo policy for Ansible account
+      ansible.builtin.copy:
+        content: "{{ bootstrap_ansible_user }} ALL=(ALL) NOPASSWD:ALL\n"
+        dest: "/etc/sudoers.d/90-{{ bootstrap_ansible_user }}-automation"
+        owner: root
+        group: root
+        mode: '0440'
+        validate: '/usr/sbin/visudo -cf %s'
+
+    - name: Verify Ansible account identity
+      ansible.builtin.command:
+        argv:
+          - id
+          - "{{ bootstrap_ansible_user }}"
+      changed_when: false
+
+    - name: Verify Ansible sudo policy
+      ansible.builtin.command:
+        argv:
+          - sudo
+          - -n
+          - -u
+          - root
+          - /usr/bin/true
+      become: true
+      become_user: "{{ bootstrap_ansible_user }}"
+      changed_when: false

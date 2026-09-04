@@ -1,0 +1,38 @@
+---
+- name: Assert supported managed Linux baseline
+  ansible.builtin.assert:
+    that:
+      - ansible_os_family == "Debian"
+      - ansible_distribution_major_version | int >= 13
+      - managed_linux_hostname is string
+      - managed_linux_hostname | length > 0
+    fail_msg: "managed_linux_base requires Debian 13+ and a non-empty hostname"
+
+- name: Set managed hostname
+  ansible.builtin.hostname:
+    name: "{{ managed_linux_hostname }}"
+
+- name: Ensure local hostname resolves through /etc/hosts
+  ansible.builtin.lineinfile:
+    path: /etc/hosts
+    regexp: '^127\.0\.1\.1\s+'
+    line: "127.0.1.1 {{ managed_linux_hostname }}"
+    create: false
+    backup: true
+
+- name: Read current timezone
+  ansible.builtin.command: timedatectl show --property=Timezone --value
+  register: managed_linux_current_timezone
+  changed_when: false
+
+- name: Set timezone
+  ansible.builtin.command: "timedatectl set-timezone {{ managed_linux_timezone }}"
+  when: managed_linux_current_timezone.stdout != managed_linux_timezone
+  changed_when: true
+
+- name: Install managed Linux base packages
+  ansible.builtin.apt:
+    name: "{{ managed_linux_base_packages }}"
+    state: present
+    update_cache: true
+    cache_valid_time: 3600

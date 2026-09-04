@@ -1,0 +1,16 @@
+---
+kodi_user: james
+kodi_group: james
+kodi_home: /home/james
+kodi_session: kodi-gbm
+kodi_session_file: /usr/share/wayland-sessions/kodi-gbm.desktop
+kodi_display_manager_service: lightdm.service
+kodi_lightdm_config_file: /etc/lightdm/lightdm.conf
+kodi_lightdm_dropin_file: /etc/lightdm/lightdm.conf.d/50-kodi-autologin.conf
+kodi_legacy_service_file: /etc/systemd/system/kodi.service
+kodi_xwrapper_config_file: /etc/X11/Xwrapper.config
+kodi_packages:
+  - kodi
+  - lightdm
+  - labwc
+  - xwayland
