@@ -1,0 +1,16 @@
+---
+# Zabbix server-side host enrollment authority.
+zabbix_host_iac_api_url: "http://192.168.2.184:8080/api_jsonrpc.php"
+
+# Runtime secret on TestServer. Secret value is never committed to Git.
+zabbix_host_iac_token_file: "/home/james/docker/secrets/zabbix-homelab-automation-token"
+
+zabbix_managed_hosts:
+  - host: "ids-01"
+    name: "ids-01"
+    ip: "192.168.2.242"
+    port: "10050"
+    groups:
+      - "Linux servers"
+    templates:
+      - "Linux by Zabbix agent"

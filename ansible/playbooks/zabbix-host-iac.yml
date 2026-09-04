@@ -1,0 +1,8 @@
+---
+- name: Reconcile Zabbix managed hosts
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  become: false
+  roles:
+    - role: zabbix_host_iac
