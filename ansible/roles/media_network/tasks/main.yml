@@ -4,8 +4,8 @@
     that:
       - media_network_primary_interface == "eth0"
       - media_network_wifi_interface == "wlan0"
-      - media_network_expected_ipv4 | ansible.utils.ipaddr
-      - media_network_gateway | ansible.utils.ipaddr
+      - media_network_expected_ipv4 is match('^[0-9]{1,3}(\.[0-9]{1,3}){3}$')
+      - media_network_gateway is match('^[0-9]{1,3}(\.[0-9]{1,3}){3}$')
       - media_network_managed_netplan_file.startswith('/etc/netplan/')
       - media_network_legacy_ethernet_netplan_file.startswith('/etc/netplan/')
       - media_network_legacy_wifi_netplan_file.startswith('/etc/netplan/')
@@ -86,7 +86,7 @@
 
 - name: Apply Netplan asynchronously when authority changed
   ansible.builtin.shell: |
-    nohup /bin/bash -c 'sleep 2; /usr/sbin/netplan apply' >/tmp/media-netplan-apply.log 2>&1 &
+    nohup /bin/bash -c 'sleep 2; netplan apply' >/tmp/media-netplan-apply.log 2>&1 &
   args:
     executable: /bin/bash
   changed_when: true
