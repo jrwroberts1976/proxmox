@@ -1,0 +1,53 @@
+---
+- name: Require Debian-family host
+  ansible.builtin.assert:
+    that:
+      - ansible_os_family == 'Debian'
+    fail_msg: This role supports Debian-family hosts only.
+
+- name: Install node exporter package
+  ansible.builtin.apt:
+    name: "{{ node_exporter_package }}"
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Create node exporter textfile collector directory
+  ansible.builtin.file:
+    path: "{{ node_exporter_textfile_directory }}"
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Configure node exporter package arguments
+  ansible.builtin.copy:
+    dest: /etc/default/prometheus-node-exporter
+    owner: root
+    group: root
+    mode: '0644'
+    content: |
+      ARGS="{{ node_exporter_extra_args | join(' ') }}"
+  notify: Restart node exporter
+
+- name: Ensure node exporter is enabled and running
+  ansible.builtin.systemd_service:
+    name: "{{ node_exporter_service }}"
+    enabled: true
+    state: started
+
+- name: Flush node exporter handlers before validation
+  ansible.builtin.meta: flush_handlers
+
+- name: Wait for node exporter listener
+  ansible.builtin.wait_for:
+    host: 127.0.0.1
+    port: "{{ node_exporter_port }}"
+    timeout: 20
+
+- name: Verify node exporter metrics endpoint
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ node_exporter_port }}/metrics"
+    return_content: false
+    status_code: 200
+  changed_when: false
