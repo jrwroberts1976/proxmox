@@ -31,11 +31,9 @@
     nmcli -t -f NAME connection show | grep -Fxq "$connection"
 
     current="$(nmcli -g connection.autoconnect,ipv4.method,ipv4.route-metric,ipv6.method,ipv6.route-metric connection show "$connection")"
-    expected="yes
-auto
-{{ media_network_route_metric }}
-auto
-{{ media_network_route_metric }}"
+    expected="$(printf 'yes\\nauto\\n%s\\nauto\\n%s' \
+      {{ media_network_route_metric }} \
+      {{ media_network_route_metric }})"
 
     if [ "$current" = "$expected" ]; then
       echo 'changed=0'
