@@ -97,7 +97,7 @@ def desired_role_rules():
     return {
         "api.access": 1,
         "api.mode": 1,
-        "api": ["*.get", "apiinfo.version"],
+        "api": ["*.get"],
         "actions.default_access": 0,
         "actions": [],
     }
@@ -110,7 +110,7 @@ def role_matches(role):
     return (
         int_value(rules.get("api.access")) == 1
         and int_value(rules.get("api.mode")) == 1
-        and set(rules.get("api") or []) == {"*.get", "apiinfo.version"}
+        and set(rules.get("api") or []) == {"*.get"}
         and int_value(rules.get("actions.default_access")) == 0
     )
 
