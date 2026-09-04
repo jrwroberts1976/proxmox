@@ -23,3 +23,12 @@ zabbix_managed_hosts:
       - "Linux servers"
     templates:
       - "Linux by Zabbix agent"
+
+  - host: "DietPi"
+    name: "DietPi"
+    ip: "192.168.2.48"
+    port: "10050"
+    groups:
+      - "Linux servers"
+    templates:
+      - "Linux by Zabbix agent"
