@@ -228,6 +228,112 @@ def ensure_geomap_default_view(api, args):
     return True
 
 
+
+def ensure_proxmox_qemu_discovery_filter(api, args):
+    templates = api.call(
+        "template.get",
+        {
+            "output": ["templateid", "host", "name"],
+            "filter": {"host": [args.proxmox_template_name]},
+        },
+    )
+    if len(templates) != 1:
+        raise ZabbixApiError(
+            f"expected exactly one template named "
+            f"{args.proxmox_template_name!r}, found {len(templates)}"
+        )
+
+    rules = api.call(
+        "discoveryrule.get",
+        {
+            "output": ["itemid", "name", "key_"],
+            "templateids": [templates[0]["templateid"]],
+            "filter": {
+                "key_": [args.proxmox_qemu_discovery_key],
+            },
+            "selectPreprocessing": "extend",
+        },
+    )
+    if len(rules) != 1:
+        raise ZabbixApiError(
+            f"expected exactly one discovery rule with key "
+            f"{args.proxmox_qemu_discovery_key!r}, found {len(rules)}"
+        )
+
+    rule = rules[0]
+    desired = [
+        {
+            "type": "12",
+            "params": args.proxmox_qemu_discovery_jsonpath,
+            "error_handler": "0",
+            "error_handler_params": "",
+        }
+    ]
+
+    current = []
+    for step in rule.get("preprocessing", []):
+        current.append(
+            {
+                "type": str(step.get("type", "")),
+                "params": str(step.get("params", "")),
+                "error_handler": str(step.get("error_handler", "0")),
+                "error_handler_params": str(
+                    step.get("error_handler_params", "")
+                ),
+            }
+        )
+
+    if current == desired:
+        return False
+
+    if current:
+        raise ZabbixApiError(
+            "Proxmox QEMU discovery already has unexpected "
+            "preprocessing; refusing to overwrite it"
+        )
+
+    api.call(
+        "discoveryrule.update",
+        {
+            "itemid": rule["itemid"],
+            "preprocessing": desired,
+        },
+    )
+
+    verify = api.call(
+        "discoveryrule.get",
+        {
+            "output": ["itemid", "name", "key_"],
+            "itemids": [rule["itemid"]],
+            "selectPreprocessing": "extend",
+        },
+    )
+    if len(verify) != 1:
+        raise ZabbixApiError(
+            "Proxmox QEMU discovery verification lookup failed"
+        )
+
+    verified = []
+    for step in verify[0].get("preprocessing", []):
+        verified.append(
+            {
+                "type": str(step.get("type", "")),
+                "params": str(step.get("params", "")),
+                "error_handler": str(step.get("error_handler", "0")),
+                "error_handler_params": str(
+                    step.get("error_handler_params", "")
+                ),
+            }
+        )
+
+    if verified != desired:
+        raise ZabbixApiError(
+            "Proxmox QEMU discovery preprocessing verification failed"
+        )
+
+    return True
+
+
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--api-url", required=True)
@@ -237,6 +343,9 @@ def parse_args():
     parser.add_argument("--latitude", required=True)
     parser.add_argument("--longitude", required=True)
     parser.add_argument("--zoom", required=True, type=int)
+    parser.add_argument("--proxmox-template-name", required=True)
+    parser.add_argument("--proxmox-qemu-discovery-key", required=True)
+    parser.add_argument("--proxmox-qemu-discovery-jsonpath", required=True)
     return parser.parse_args()
 
 
@@ -254,6 +363,7 @@ def main():
         api.login()
         changed |= ensure_host_inventory(api, args)
         changed |= ensure_geomap_default_view(api, args)
+        changed |= ensure_proxmox_qemu_discovery_filter(api, args)
     except ZabbixApiError as exc:
         print(f"FAIL: {exc}", file=sys.stderr)
         return 1

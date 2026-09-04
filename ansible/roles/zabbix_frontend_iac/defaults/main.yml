@@ -10,4 +10,8 @@ zabbix_geomap_latitude: "50.79039"
 zabbix_geomap_longitude: "-1.890218"
 zabbix_geomap_zoom: 15
 
+zabbix_proxmox_template_name: "Proxmox VE by HTTP"
+zabbix_proxmox_qemu_discovery_key: "proxmox.qemu.discovery"
+zabbix_proxmox_qemu_discovery_jsonpath: "$.data[?(@.template != 1)]"
+
 zabbix_frontend_iac_state_dir: "/var/lib/homelab-zabbix-frontend-iac"
