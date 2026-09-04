@@ -11,6 +11,7 @@ This directory is the configuration-management layer for Proxmox guest workloads
 | `nginx` | Nginx package and reusable reverse-proxy/static sites | Debian 13 |
 | `zabbix_server` | Zabbix server, frontend, Nginx integration and PostgreSQL schema bootstrap | Zabbix 7.0 LTS |
 | `zabbix_agent` | Zabbix Agent 2 client configuration | Zabbix 7.0 LTS |
+| `zabbix_grafana_iac` | Dedicated read-only Zabbix role/group/user/token authority for the Grafana datasource | CT201 Zabbix 7.0 LTS |
 
 The roles are deliberately separate. A VM may be placed in several inventory groups, allowing PostgreSQL, TimescaleDB, Nginx and Zabbix to be composed without turning the repository into one monolithic playbook.
 
@@ -124,6 +125,35 @@ app-platform-01 : ok=9 changed=3 unreachable=0 failed=0 skipped=1
 
 This is now part of the automated role behavior and must remain in the full end-to-end rebuild path.
 
+## Grafana Zabbix API authority
+
+The Grafana service identity is managed with:
+
+```text
+playbooks/zabbix-grafana-iac.yml
+roles/zabbix_grafana_iac/
+```
+
+Run from TestServer:
+
+```bash
+ansible-playbook \
+  -i inventories/zabbix-lxc/hosts.yml \
+  playbooks/zabbix-grafana-iac.yml \
+  --ask-vault-pass
+```
+
+The role creates/maintains the dedicated `grafana-zabbix` identity and a read-only API allow-list. The generated datasource token is staged only on the controller and is encrypted into the approved SOPS authority in the `docker-env` ids-01 secret tree when authority does not already exist.
+
+Normal reruns with encrypted authority present must report:
+
+```text
+token=PRESENT
+token_generated=NO
+```
+
+Do not replace this service identity with the Zabbix `Admin` credential.
+
 ## Runbooks
 
 Relevant procedures:
@@ -133,6 +163,7 @@ Relevant procedures:
 ../runbooks/timescaledb-install.md
 ../runbooks/nginx-install.md
 ../runbooks/zabbix-server-install.md
+../docs/zabbix-grafana-integration.md
 ```
 
 After the standalone Zabbix server role is GREEN and idempotent, the next acceptance target is a full VM101 destroy/rebuild with the entire service chain applied automatically and followed by an idempotence and OpenTofu zero-drift gate.
