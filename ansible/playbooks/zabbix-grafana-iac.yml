@@ -1,0 +1,11 @@
+---
+- name: Configure Zabbix authority for Grafana
+  hosts: zabbix_servers
+  become: true
+  gather_facts: false
+
+  vars:
+    zabbix_grafana_admin_password: "{{ vault_zabbix_bootstrap_admin_password }}"
+
+  roles:
+    - role: zabbix_grafana_iac
