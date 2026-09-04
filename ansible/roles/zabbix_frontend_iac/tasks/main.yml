@@ -63,9 +63,9 @@
         ansible_become_flags: "-s /bin/sh"
       register: zabbix_admin_recovery
       changed_when: "'UPDATE 1' in zabbix_admin_recovery.stdout"
-      failed_when:
-        - zabbix_admin_recovery.rc != 0
-        - "'UPDATE 1' not in zabbix_admin_recovery.stdout"
+      failed_when: >-
+        zabbix_admin_recovery.rc != 0 or
+        'UPDATE 1' not in zabbix_admin_recovery.stdout
 
     - name: Rotate recovered Admin credential to Vault authority
       ansible.builtin.command:
