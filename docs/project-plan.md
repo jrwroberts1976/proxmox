@@ -199,19 +199,23 @@ Jenkins must not be required to recover the platform. The same IaC must be execu
 
 - [x] Verify local node_exporter metrics.
 - [x] Verify CPU/NVMe thermal metrics are exposed.
-- [ ] Add `192.168.2.70:9100` to the existing Prometheus configuration.
-- [ ] Confirm target is `UP`.
-- [ ] Add Proxmox host to existing Grafana host dashboards.
-- [ ] Add CPU, RAM, load, filesystem, disk-I/O and network panels.
+- [x] Add `192.168.2.70:9100` to the existing Prometheus configuration.
+- [x] Confirm target is `UP`.
+- [x] Add Proxmox host to the existing Grafana/Network Hosts view.
+- [x] Prove standard CPU, RAM/load and root-filesystem metric visibility.
+- [x] Prove standard host-up and disk-space alert coverage.
+- [x] Forward the Proxmox systemd journal through Alloy to central Loki.
+- [x] Provision Grafana Zabbix plugin `6.6.0` and a SOPS-backed read-only Zabbix datasource.
+- [x] Prove Grafana can query Zabbix and read the `Infrastructure/Proxmox` host group.
+- [ ] Onboard the Proxmox VE host itself into Zabbix using the approved Proxmox integration/template.
+- [ ] Add dedicated disk-I/O/network panels where useful.
 - [ ] Add CPU/package, PCH and NVMe temperature panels.
-- [ ] Add host-up alerting.
-- [ ] Add disk-space alerting.
 - [ ] Add high-temperature alerting.
 - [ ] Add SMART/NVMe health reporting where practical.
 - [ ] Track the historic NVMe unsafe-shutdown baseline of 103 for increases.
-- [ ] Evaluate a Proxmox API exporter for VM/LXC/storage metrics after node-level monitoring is stable.
+- [ ] Evaluate a Proxmox API exporter for VM/LXC/storage metrics only if it adds value beyond the established Prometheus/Zabbix paths.
 
-**Gate:** the host is visible in Prometheus/Grafana and loss/degradation can be detected before production migration.
+**Gate:** basic Prometheus/Grafana host observability is passed. Zabbix datasource integration is passed. Proxmox-specific Zabbix onboarding and optional monitoring enhancements remain backlog work.
 
 ### Phase 4 - Host security baseline
 
