@@ -68,26 +68,42 @@
     daemon_reload: true
   when: kodi_legacy_service_removed.changed
 
-- name: Ensure LightDM drop-in directory exists
+- name: Remove ineffective LightDM Kodi drop-in
   ansible.builtin.file:
-    path: "{{ kodi_lightdm_dropin_dir }}"
-    state: directory
-    owner: root
-    group: root
-    mode: '0755'
+    path: "{{ kodi_lightdm_dropin_file }}"
+    state: absent
+  notify: Restart LightDM
 
-- name: Configure LightDM to autologin directly to Kodi GBM
-  ansible.builtin.copy:
-    dest: "{{ kodi_lightdm_dropin_file }}"
-    owner: root
-    group: root
-    mode: '0644'
-    content: |
-      [Seat:*]
-      user-session={{ kodi_session }}
-      autologin-user={{ kodi_user }}
-      autologin-user-timeout=0
-      autologin-session={{ kodi_session }}
+- name: Configure authoritative LightDM user session
+  ansible.builtin.lineinfile:
+    path: "{{ kodi_lightdm_config_file }}"
+    regexp: '^user-session='
+    line: "user-session={{ kodi_session }}"
+    insertafter: '^\[Seat:\*\]$'
+  notify: Restart LightDM
+
+- name: Configure authoritative LightDM autologin user
+  ansible.builtin.lineinfile:
+    path: "{{ kodi_lightdm_config_file }}"
+    regexp: '^autologin-user='
+    line: "autologin-user={{ kodi_user }}"
+    insertafter: '^\[Seat:\*\]$'
+  notify: Restart LightDM
+
+- name: Configure authoritative LightDM autologin timeout
+  ansible.builtin.lineinfile:
+    path: "{{ kodi_lightdm_config_file }}"
+    regexp: '^autologin-user-timeout='
+    line: 'autologin-user-timeout=0'
+    insertafter: '^\[Seat:\*\]$'
+  notify: Restart LightDM
+
+- name: Configure authoritative LightDM autologin session
+  ansible.builtin.lineinfile:
+    path: "{{ kodi_lightdm_config_file }}"
+    regexp: '^autologin-session='
+    line: "autologin-session={{ kodi_session }}"
+    insertafter: '^\[Seat:\*\]$'
   notify: Restart LightDM
 
 - name: Ensure LightDM is enabled and running
@@ -131,9 +147,14 @@
   changed_when: false
   failed_when: kodi_lightdm_enabled.stdout.strip() not in ['enabled', 'static']
 
-- name: Verify LightDM Kodi autologin authority
+- name: Verify authoritative LightDM Kodi user session
   ansible.builtin.command:
-    cmd: "grep -F 'autologin-session={{ kodi_session }}' {{ kodi_lightdm_dropin_file }}"
+    cmd: "grep -F 'user-session={{ kodi_session }}' {{ kodi_lightdm_config_file }}"
+  changed_when: false
+
+- name: Verify authoritative LightDM Kodi autologin session
+  ansible.builtin.command:
+    cmd: "grep -F 'autologin-session={{ kodi_session }}' {{ kodi_lightdm_config_file }}"
   changed_when: false
 
 - name: Verify Kodi is using GBM session command
