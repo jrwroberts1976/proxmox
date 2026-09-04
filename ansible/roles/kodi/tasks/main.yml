@@ -10,12 +10,19 @@
     database: passwd
     key: "{{ kodi_user }}"
 
-- name: Install Kodi display stack
+- name: Install minimal Kodi display stack
   ansible.builtin.apt:
     name: "{{ kodi_packages }}"
     state: present
     update_cache: true
     cache_valid_time: 3600
+
+- name: Remove conflicting generic Xorg video drivers
+  ansible.builtin.apt:
+    name: "{{ kodi_conflicting_xorg_packages }}"
+    state: absent
+    autoremove: false
+  notify: Restart Kodi
 
 - name: Configure Xorg wrapper for Kodi console service
   ansible.builtin.copy:
