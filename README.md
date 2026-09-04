@@ -81,7 +81,9 @@ This repository tracks the build, configuration, migration, and operational runb
 - [ ] Apply validated Linux security hardening to VM `101` and revalidate SSH/ICMP controls
 - [ ] Re-run matching Greenbone checks after VM `101` hardening
 - [ ] Review/update HP BIOS firmware
-- [ ] Add Proxmox target to central Prometheus/Grafana
+- [x] Add Proxmox target to central Prometheus/Grafana
+- [x] Provision Grafana Zabbix plugin/datasource with SOPS-backed read-only API identity
+- [ ] Onboard the Proxmox VE host itself into Zabbix using the approved Proxmox integration/template
 - [ ] Host security baseline
 - [ ] Backup destination and restore test
 - [ ] Jenkins IaC integration
@@ -159,6 +161,7 @@ Each component has its own validation, idempotence, acceptance and rollback gate
 
 - [`docs/control-node-architecture.md`](docs/control-node-architecture.md) — defines TestServer as the IaC control node/automation runner, distinguishes it from a bastion host, and documents the GitHub → TestServer → OpenTofu/Ansible → Proxmox/guest management flow.
 - [`docs/project-plan.md`](docs/project-plan.md) — full project plan, IaC model, Jenkins integration, migration gates, DNS resilience, backup/DR and acceptance criteria.
+- [`docs/zabbix-grafana-integration.md`](docs/zabbix-grafana-integration.md) — validated CT201 Zabbix API identity, SOPS token authority, Grafana Zabbix plugin/datasource flow, end-to-end proof and remaining Proxmox-host onboarding boundary.
 - [`docs/installation.md`](docs/installation.md) — physical host installation, repository setup, networking, validation commands, SMART/thermal/virtualisation baselines and post-install gates.
 - [`docs/build-log.md`](docs/build-log.md) — chronological implementation record of changes performed on the live host.
 - [`docs/debian13-template-vm101-opentofu.md`](docs/debian13-template-vm101-opentofu.md) — exact Debian 13 template `9000` and OpenTofu VM `101` build, API permissions, state separation, saved-plan review/apply and validation procedure.
