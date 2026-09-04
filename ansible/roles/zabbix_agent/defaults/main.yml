@@ -5,3 +5,8 @@ zabbix_agent_service_name: zabbix-agent2
 zabbix_agent_port: 10050
 zabbix_agent_hostname: "{{ inventory_hostname }}"
 zabbix_agent_server_active: "{{ zabbix_server_address | default('') }}"
+
+# Optional host firewall management.
+# Disabled by default so existing hosts are not changed implicitly.
+zabbix_agent_manage_ufw: false
+zabbix_agent_ufw_source: "{{ zabbix_server_address }}"
