@@ -9,6 +9,8 @@
       - (zabbix_grafana_sops_secret | length) > 0
     fail_msg: "Zabbix Grafana IaC requires Admin API authority, host groups and SOPS paths."
   no_log: true
+  delegate_to: localhost
+  become: false
 
 - name: Verify controller SOPS worktree
   ansible.builtin.stat:
@@ -34,45 +36,53 @@
   delegate_to: localhost
   become: false
 
-- name: Create Zabbix Grafana IaC state directory
+- name: Create local Zabbix Grafana IaC state directory
   ansible.builtin.file:
     path: "{{ zabbix_grafana_state_dir }}"
     state: directory
-    owner: root
-    group: root
-    mode: "0750"
+    owner: "{{ lookup('env', 'USER') }}"
+    mode: "0700"
+  delegate_to: localhost
+  become: false
 
-- name: Install Zabbix Grafana API IaC helper
+- name: Install local Zabbix Grafana API IaC helper
   ansible.builtin.copy:
     src: zabbix_grafana_iac.py
-    dest: /usr/local/libexec/homelab-zabbix-grafana-iac
-    owner: root
-    group: root
-    mode: "0755"
+    dest: "{{ zabbix_grafana_helper_path }}"
+    mode: "0700"
+  delegate_to: localhost
+  become: false
+
+- name: Remove stale staged token before convergence
+  ansible.builtin.file:
+    path: "{{ zabbix_grafana_token_staging }}"
+    state: absent
+  delegate_to: localhost
+  become: false
+  no_log: true
 
 - name: Converge Zabbix Grafana API authority
   ansible.builtin.command:
-    argv: >-
-      {{
-        [
-          '/usr/local/libexec/homelab-zabbix-grafana-iac',
-          '--api-url', zabbix_grafana_api_url,
-          '--role-name', zabbix_grafana_role_name,
-          '--user-group-name', zabbix_grafana_user_group_name,
-          '--username', zabbix_grafana_username,
-          '--token-name', zabbix_grafana_token_name,
-          '--authority-present',
-          (zabbix_grafana_sops_secret_stat.stat.exists | ternary('yes', 'no')),
-          '--token-output', zabbix_grafana_token_staging,
-          '--status-file', zabbix_grafana_state_dir ~ '/status'
-        ]
-        +
-        (
-          zabbix_grafana_host_groups
-          | map('regex_replace', '^(.*)$', '--host-group=\\1')
-          | list
-        )
-      }}
+    argv:
+      - "{{ zabbix_grafana_helper_path }}"
+      - --api-url
+      - "{{ zabbix_grafana_api_url }}"
+      - --role-name
+      - "{{ zabbix_grafana_role_name }}"
+      - --user-group-name
+      - "{{ zabbix_grafana_user_group_name }}"
+      - --username
+      - "{{ zabbix_grafana_username }}"
+      - --token-name
+      - "{{ zabbix_grafana_token_name }}"
+      - --host-groups-json
+      - "{{ zabbix_grafana_host_groups | to_json }}"
+      - --authority-present
+      - "{{ zabbix_grafana_sops_secret_stat.stat.exists | ternary('yes', 'no') }}"
+      - --token-output
+      - "{{ zabbix_grafana_token_staging }}"
+      - --status-file
+      - "{{ zabbix_grafana_state_dir }}/status"
   environment:
     ZABBIX_API_USERNAME: "{{ zabbix_grafana_admin_username }}"
     ZABBIX_API_PASSWORD: "{{ zabbix_grafana_admin_password }}"
@@ -80,12 +90,16 @@
   changed_when: zabbix_grafana_iac_apply.rc == 2
   failed_when: zabbix_grafana_iac_apply.rc not in [0, 2]
   no_log: true
+  delegate_to: localhost
+  become: false
 
 - name: Check staged generated token
   ansible.builtin.stat:
     path: "{{ zabbix_grafana_token_staging }}"
   register: zabbix_grafana_token_staging_stat
   when: not zabbix_grafana_sops_secret_stat.stat.exists
+  delegate_to: localhost
+  become: false
 
 - name: Require generated token when SOPS authority was absent
   ansible.builtin.assert:
@@ -94,24 +108,35 @@
       - zabbix_grafana_token_staging_stat.stat.mode == "0600"
     fail_msg: "Zabbix token was not safely staged after generation."
   when: not zabbix_grafana_sops_secret_stat.stat.exists
-
-- name: Materialise encrypted SOPS token authority
-  ansible.builtin.shell:
-    cmd: |
-      umask 077
-      TARGET="{{ zabbix_grafana_sops_secret }}"
-      STAGED="{{ zabbix_grafana_token_staging }}"
-      mkdir -p "$(dirname "$TARGET")"
-      printf 'ZABBIX_GRAFANA_API_TOKEN=%s\n' "$(cat "$STAGED")" > "$TARGET"
-      sops --config "{{ zabbix_grafana_sops_config }}" --encrypt --in-place "$TARGET"
-      rm -f "$STAGED"
-    executable: /bin/bash
   delegate_to: localhost
   become: false
-  when: not zabbix_grafana_sops_secret_stat.stat.exists
-  no_log: true
 
-- name: Verify encrypted token contains ciphertext and no plaintext token
+- name: Encrypt newly generated token into SOPS authority
+  when: not zabbix_grafana_sops_secret_stat.stat.exists
+  block:
+    - name: Materialise encrypted SOPS token authority
+      ansible.builtin.shell:
+        cmd: |
+          umask 077
+          TARGET="{{ zabbix_grafana_sops_secret }}"
+          STAGED="{{ zabbix_grafana_token_staging }}"
+          mkdir -p "$(dirname "$TARGET")"
+          printf 'ZABBIX_GRAFANA_API_TOKEN=%s\n' "$(cat "$STAGED")" > "$TARGET"
+          sops --config "{{ zabbix_grafana_sops_config }}" --encrypt --in-place "$TARGET"
+        executable: /bin/bash
+      delegate_to: localhost
+      become: false
+      no_log: true
+  always:
+    - name: Remove staged token after SOPS handling
+      ansible.builtin.file:
+        path: "{{ zabbix_grafana_token_staging }}"
+        state: absent
+      delegate_to: localhost
+      become: false
+      no_log: true
+
+- name: Verify encrypted token authority
   ansible.builtin.shell:
     cmd: |
       set -u
@@ -123,10 +148,4 @@
   changed_when: false
   delegate_to: localhost
   become: false
-  no_log: true
-
-- name: Remove any residual staged token
-  ansible.builtin.file:
-    path: "{{ zabbix_grafana_token_staging }}"
-    state: absent
   no_log: true
