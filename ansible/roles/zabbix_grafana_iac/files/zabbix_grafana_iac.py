@@ -93,21 +93,6 @@ def ensure_host_group(api, name):
     return result["groupids"][0], True
 
 
-def role_matches(role):
-    if int_value(role.get("type")) != 1:
-        return False
-    rules = role.get("rules") or {}
-    if int_value(rules.get("api.access")) != 1:
-        return False
-    if int_value(rules.get("api.mode")) != 1:
-        return False
-    if set(rules.get("api") or []) != {"*.get", "apiinfo.version"}:
-        return False
-    if int_value(rules.get("actions.default_access")) != 0:
-        return False
-    return True
-
-
 def desired_role_rules():
     return {
         "api.access": 1,
@@ -116,6 +101,18 @@ def desired_role_rules():
         "actions.default_access": 0,
         "actions": [],
     }
+
+
+def role_matches(role):
+    if int_value(role.get("type")) != 1:
+        return False
+    rules = role.get("rules") or {}
+    return (
+        int_value(rules.get("api.access")) == 1
+        and int_value(rules.get("api.mode")) == 1
+        and set(rules.get("api") or []) == {"*.get", "apiinfo.version"}
+        and int_value(rules.get("actions.default_access")) == 0
+    )
 
 
 def ensure_role(api, name):
@@ -171,8 +168,8 @@ def ensure_user_group(api, name, group_ids):
         },
     )
     group = one_or_none(groups, f"user group {name!r}")
-
     desired_norm = normalize_rights(desired_rights)
+
     if not group:
         result = api.call(
             "usergroup.create",
@@ -296,12 +293,13 @@ def ensure_token(api, name, user_id, authority_present, token_output):
         generated = True
         changed = True
 
-    return token_id, changed, generated
+    return changed, generated
 
 
 def write_status(path, values):
     if not path:
         return
+    os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
     with open(path, "w", encoding="utf-8") as fh:
         for key in sorted(values):
             fh.write(f"{key}={values[key]}\n")
@@ -315,7 +313,7 @@ def parse_args():
     parser.add_argument("--user-group-name", required=True)
     parser.add_argument("--username", required=True)
     parser.add_argument("--token-name", required=True)
-    parser.add_argument("--host-group", action="append", default=[])
+    parser.add_argument("--host-groups-json", required=True)
     parser.add_argument("--authority-present", choices=["yes", "no"], required=True)
     parser.add_argument("--token-output", required=True)
     parser.add_argument("--status-file")
@@ -329,19 +327,24 @@ def main():
     if not admin_username or not admin_password:
         print("FAIL: Zabbix Admin API credentials are required", file=sys.stderr)
         return 1
-    if not args.host_group:
+
+    try:
+        host_groups = json.loads(args.host_groups_json)
+    except json.JSONDecodeError as exc:
+        print(f"FAIL: invalid host-groups JSON: {exc}", file=sys.stderr)
+        return 1
+    if not isinstance(host_groups, list) or not host_groups:
         print("FAIL: at least one host group is required", file=sys.stderr)
         return 1
 
     api = ZabbixApi(args.api_url)
     changed = False
-    status = {}
     try:
         api.login(admin_username, admin_password)
 
         group_ids = []
-        for name in args.host_group:
-            group_id, item_changed = ensure_host_group(api, name)
+        for name in host_groups:
+            group_id, item_changed = ensure_host_group(api, str(name))
             group_ids.append(group_id)
             changed = changed or item_changed
 
@@ -358,7 +361,7 @@ def main():
         )
         changed = changed or item_changed
 
-        token_id, item_changed, generated = ensure_token(
+        item_changed, generated = ensure_token(
             api,
             args.token_name,
             user_id,
@@ -367,23 +370,24 @@ def main():
         )
         changed = changed or item_changed
 
-        status = {
-            "authority_present": args.authority_present,
-            "host_groups": len(group_ids),
-            "role": "PRESENT",
-            "user_group": "PRESENT",
-            "user": "PRESENT",
-            "token": "PRESENT",
-            "token_generated": "YES" if generated else "NO",
-            "result": "PASS",
-        }
-        write_status(args.status_file, status)
+        write_status(
+            args.status_file,
+            {
+                "authority_present": args.authority_present,
+                "host_groups": len(group_ids),
+                "result": "PASS",
+                "role": "PRESENT",
+                "token": "PRESENT",
+                "token_generated": "YES" if generated else "NO",
+                "user": "PRESENT",
+                "user_group": "PRESENT",
+            },
+        )
 
         print("PASS: Zabbix Grafana API authority converged")
         return 2 if changed else 0
     except ZabbixApiError as exc:
-        status = {"result": "FAIL", "reason": str(exc)}
-        write_status(args.status_file, status)
+        write_status(args.status_file, {"result": "FAIL", "reason": str(exc)})
         print(f"FAIL: {exc}", file=sys.stderr)
         return 1
     finally:
