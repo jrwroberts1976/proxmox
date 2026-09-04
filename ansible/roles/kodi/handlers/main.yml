@@ -1,6 +1,6 @@
 ---
-- name: Restart Kodi
+- name: Restart LightDM
   ansible.builtin.systemd_service:
-    name: "{{ kodi_service_name }}"
+    name: "{{ kodi_display_manager_service }}"
     state: restarted
     daemon_reload: true
