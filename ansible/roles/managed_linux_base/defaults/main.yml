@@ -1,0 +1,10 @@
+---
+managed_linux_hostname: "{{ inventory_hostname }}"
+managed_linux_timezone: Europe/London
+managed_linux_base_packages:
+  - ca-certificates
+  - curl
+  - git
+  - jq
+  - rsync
+  - vim
