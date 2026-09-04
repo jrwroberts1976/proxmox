@@ -10,30 +10,25 @@
     database: passwd
     key: "{{ kodi_user }}"
 
-- name: Install minimal Kodi display stack
+- name: Install Kodi GBM session dependencies
   ansible.builtin.apt:
     name: "{{ kodi_packages }}"
     state: present
     update_cache: true
     cache_valid_time: 3600
 
-- name: Remove conflicting generic Xorg video drivers
-  ansible.builtin.apt:
-    name: "{{ kodi_conflicting_xorg_packages }}"
-    state: absent
-    autoremove: false
-  notify: Restart Kodi
+- name: Require packaged Kodi GBM session
+  ansible.builtin.stat:
+    path: "{{ kodi_session_file }}"
+  register: kodi_gbm_session
 
-- name: Configure Xorg wrapper for Kodi console service
-  ansible.builtin.copy:
-    dest: /etc/X11/Xwrapper.config
-    owner: root
-    group: root
-    mode: '0644'
-    content: |
-      allowed_users={{ kodi_xwrapper_allowed_users }}
-      needs_root_rights={{ kodi_xwrapper_needs_root_rights }}
-  notify: Restart Kodi
+- name: Assert packaged Kodi GBM session exists
+  ansible.builtin.assert:
+    that:
+      - kodi_gbm_session.stat.exists
+      - kodi_gbm_session.stat.isreg
+    fail_msg: >-
+      Expected packaged Kodi GBM session {{ kodi_session_file }} is missing.
 
 - name: Ensure Kodi runtime user has media device access
   ansible.builtin.user:
@@ -45,134 +40,108 @@
       - input
     append: true
 
-- name: Gather service state before display-manager transition
-  ansible.builtin.service_facts:
+- name: Inspect legacy custom Kodi service
+  ansible.builtin.stat:
+    path: "{{ kodi_legacy_service_file }}"
+  register: kodi_legacy_service
 
-- name: Record whether display manager is active
-  ansible.builtin.set_fact:
-    kodi_display_manager_was_active: >-
-      {{ kodi_display_manager_service in ansible_facts.services and
-         ansible_facts.services[kodi_display_manager_service].state == 'running' }}
-
-- name: Stop and disable display manager for dedicated Kodi session
+- name: Stop and disable legacy custom Kodi service
   ansible.builtin.systemd_service:
-    name: "{{ kodi_display_manager_service }}"
+    name: kodi.service
     state: stopped
     enabled: false
-  when: kodi_display_manager_service in ansible_facts.services
+  when: kodi_legacy_service.stat.exists
 
-- name: Clean orphaned xinit from previous display-manager conflict
-  ansible.builtin.command:
-    cmd: "pkill -u {{ kodi_user }} -x xinit"
-  register: kodi_orphan_xinit_cleanup
-  changed_when: kodi_orphan_xinit_cleanup.rc == 0
-  failed_when: kodi_orphan_xinit_cleanup.rc not in [0, 1]
-  when: kodi_display_manager_was_active | bool
-
-- name: Wait for Xwayland display owner to exit
-  ansible.builtin.command:
-    cmd: pgrep -x Xwayland
-  register: kodi_xwayland_state
-  changed_when: false
-  failed_when: false
-  retries: 10
-  delay: 1
-  until: kodi_xwayland_state.rc != 0
-  when: kodi_display_manager_was_active | bool
-
-- name: Remove stale X display lock after display-manager shutdown
+- name: Remove legacy custom Kodi service
   ansible.builtin.file:
-    path: "{{ item }}"
+    path: "{{ kodi_legacy_service_file }}"
     state: absent
-  loop:
-    - /tmp/.X0-lock
-    - /tmp/.X11-unix/X0
-  when: kodi_display_manager_was_active | bool
+  register: kodi_legacy_service_removed
 
-- name: Install managed Kodi systemd service
+- name: Remove temporary Xorg wrapper configuration
+  ansible.builtin.file:
+    path: "{{ kodi_xwrapper_config_file }}"
+    state: absent
+
+- name: Reload systemd after legacy Kodi service removal
+  ansible.builtin.systemd_service:
+    daemon_reload: true
+  when: kodi_legacy_service_removed.changed
+
+- name: Ensure LightDM drop-in directory exists
+  ansible.builtin.file:
+    path: "{{ kodi_lightdm_dropin_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Configure LightDM to autologin directly to Kodi GBM
   ansible.builtin.copy:
-    dest: "/etc/systemd/system/{{ kodi_service_name }}.service"
+    dest: "{{ kodi_lightdm_dropin_file }}"
     owner: root
     group: root
     mode: '0644'
     content: |
-      [Unit]
-      Description=Kodi Media Center
-      After=systemd-user-sessions.service network-online.target sound.target
-      Wants=network-online.target
-      Conflicts=getty@{{ kodi_tty }}.service display-manager.service
+      [Seat:*]
+      user-session={{ kodi_session }}
+      autologin-user={{ kodi_user }}
+      autologin-user-timeout=0
+      autologin-session={{ kodi_session }}
+  notify: Restart LightDM
 
-      [Service]
-      Type=simple
-      User={{ kodi_user }}
-      Group={{ kodi_group }}
-      PAMName=login
-      TTYPath=/dev/{{ kodi_tty }}
-      StandardInput=tty
-      StandardOutput=journal
-      StandardError=journal
-      Environment=HOME={{ kodi_home }}
-      Environment=DISPLAY={{ kodi_display }}
-      ExecStart=/usr/bin/xinit /usr/bin/kodi-standalone -- {{ kodi_display }} {{ kodi_vt }} -keeptty -nolisten tcp
-      Restart=on-failure
-      RestartSec={{ kodi_restart_sec }}
-      KillMode=control-group
-      TimeoutStopSec=20
-
-      [Install]
-      WantedBy=graphical.target
-  notify: Restart Kodi
-
-- name: Ensure Kodi service is enabled and running
+- name: Ensure LightDM is enabled and running
   ansible.builtin.systemd_service:
-    name: "{{ kodi_service_name }}"
+    name: "{{ kodi_display_manager_service }}"
     enabled: true
     state: started
     daemon_reload: true
 
-- name: Flush Kodi handlers before validation
+- name: Flush LightDM handler before validation
   ansible.builtin.meta: flush_handlers
 
-- name: Wait for Kodi service to become active
+- name: Wait for Kodi process to start through GBM session
   ansible.builtin.command:
-    cmd: "systemctl is-active {{ kodi_service_name }}"
-  register: kodi_service_active
+    cmd: "pgrep -a -u {{ kodi_user }} kodi.bin"
+  register: kodi_process
   changed_when: false
   failed_when: false
-  retries: 12
+  retries: 20
   delay: 2
-  until: kodi_service_active.stdout.strip() == 'active'
+  until: kodi_process.rc == 0
 
-- name: Require Kodi service to be active
+- name: Require Kodi process to be running
   ansible.builtin.assert:
     that:
-      - kodi_service_active.stdout.strip() == 'active'
+      - kodi_process.rc == 0
     fail_msg: >-
-      Kodi service did not become active. Final state:
-      {{ kodi_service_active.stdout | default('unknown') }}.
+      Kodi did not start through the LightDM {{ kodi_session }} session.
 
-- name: Verify Kodi service is enabled
+- name: Verify LightDM service is active
   ansible.builtin.command:
-    cmd: "systemctl is-enabled {{ kodi_service_name }}"
-  register: kodi_service_enabled
+    cmd: "systemctl is-active {{ kodi_display_manager_service }}"
+  register: kodi_lightdm_active
   changed_when: false
-  failed_when: kodi_service_enabled.stdout.strip() != 'enabled'
+  failed_when: kodi_lightdm_active.stdout.strip() != 'active'
 
-- name: Verify display manager is disabled
+- name: Verify LightDM service is enabled
   ansible.builtin.command:
     cmd: "systemctl is-enabled {{ kodi_display_manager_service }}"
-  register: kodi_display_manager_enabled
+  register: kodi_lightdm_enabled
   changed_when: false
-  failed_when: kodi_display_manager_enabled.stdout.strip() not in ['disabled', 'masked']
-  when: kodi_display_manager_service in ansible_facts.services
+  failed_when: kodi_lightdm_enabled.stdout.strip() not in ['enabled', 'static']
 
-- name: Verify X display is owned by Kodi service
-  ansible.builtin.shell:
-    cmd: "set -o pipefail && pgrep -a Xorg | grep -F -- '{{ kodi_display }}'"
-    executable: /bin/bash
-  changed_when: false
-
-- name: Verify Kodi process is running
+- name: Verify LightDM Kodi autologin authority
   ansible.builtin.command:
-    cmd: pgrep -a -u {{ kodi_user }} kodi.bin
+    cmd: "grep -F 'autologin-session={{ kodi_session }}' {{ kodi_lightdm_dropin_file }}"
+  changed_when: false
+
+- name: Verify Kodi is using GBM session command
+  ansible.builtin.shell:
+    cmd: >-
+      set -o pipefail &&
+      ps -eo user,args |
+      grep -E '^{{ kodi_user }}[[:space:]].*(kodi-standalone|kodi\.bin)' |
+      grep -F -- '--windowing=gbm'
+    executable: /bin/bash
   changed_when: false
