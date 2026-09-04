@@ -16,6 +16,14 @@
     fail_msg: "Zabbix frontend IaC requires valid API credentials, dashboard/host names and Geomap coordinates."
   no_log: true
 
+- name: Create Zabbix frontend IaC state directory
+  ansible.builtin.file:
+    path: "{{ zabbix_frontend_iac_state_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0750"
+
 - name: Install Zabbix Admin credential helper
   ansible.builtin.copy:
     src: zabbix_admin_credential_iac.py
@@ -34,7 +42,7 @@
 
 - name: Check Zabbix Admin bootstrap marker
   ansible.builtin.stat:
-    path: /var/lib/zabbix/.homelab-admin-bootstrap-v1
+    path: "{{ zabbix_frontend_iac_state_dir }}/admin-bootstrap-v1"
   register: zabbix_admin_bootstrap_marker
 
 - name: Bootstrap Zabbix Admin credential when not yet completed
@@ -78,7 +86,7 @@
           - --mode
           - rotate
           - --status-file
-          - /var/lib/zabbix/.homelab-admin-bootstrap-status
+          - "{{ zabbix_frontend_iac_state_dir }}/admin-bootstrap-status"
       environment:
         ZABBIX_RECOVERY_PASSWORD: "zabbix"
         ZABBIX_DESIRED_PASSWORD: "{{ zabbix_frontend_api_password }}"
@@ -89,10 +97,10 @@
 
     - name: Record completed Zabbix Admin bootstrap
       ansible.builtin.file:
-        path: /var/lib/zabbix/.homelab-admin-bootstrap-v1
+        path: "{{ zabbix_frontend_iac_state_dir }}/admin-bootstrap-v1"
         state: touch
-        owner: zabbix
-        group: zabbix
+        owner: root
+        group: root
         mode: "0600"
         modification_time: preserve
         access_time: preserve
@@ -108,7 +116,7 @@
       - --mode
       - verify
       - --status-file
-      - /var/lib/zabbix/.homelab-admin-bootstrap-status
+      - "{{ zabbix_frontend_iac_state_dir }}/admin-bootstrap-status"
   environment:
     ZABBIX_DESIRED_PASSWORD: "{{ zabbix_frontend_api_password }}"
   register: zabbix_admin_verify
