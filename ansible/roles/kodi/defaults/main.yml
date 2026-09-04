@@ -12,5 +12,10 @@ kodi_xwrapper_needs_root_rights: 'yes'
 kodi_packages:
   - kodi
   - xinit
-  - xserver-xorg
+  - xserver-xorg-core
+  - xserver-xorg-input-libinput
   - xserver-xorg-legacy
+kodi_conflicting_xorg_packages:
+  - xserver-xorg
+  - xserver-xorg-video-all
+  - xserver-xorg-video-fbdev
