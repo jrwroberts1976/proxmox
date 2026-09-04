@@ -69,3 +69,36 @@
     name: "{{ zabbix_agent_service_name }}"
     state: started
     enabled: true
+
+- name: Check whether Zabbix Agent 2 UFW rule already exists
+  ansible.builtin.shell: |
+    set -o pipefail
+    ufw status |
+      grep -F "{{ zabbix_agent_port }}/tcp" |
+      grep -Fq "{{ zabbix_agent_ufw_source }}"
+  args:
+    executable: /bin/bash
+  register: zabbix_agent_ufw_rule_check
+  changed_when: false
+  failed_when: false
+  when: zabbix_agent_manage_ufw | bool
+
+- name: Allow Zabbix server to reach Agent 2 through UFW
+  ansible.builtin.command:
+    argv:
+      - ufw
+      - allow
+      - from
+      - "{{ zabbix_agent_ufw_source }}"
+      - to
+      - any
+      - port
+      - "{{ zabbix_agent_port | string }}"
+      - proto
+      - tcp
+      - comment
+      - "Zabbix server to Agent 2"
+  when:
+    - zabbix_agent_manage_ufw | bool
+    - zabbix_agent_ufw_rule_check.rc != 0
+  changed_when: true

@@ -14,3 +14,12 @@ zabbix_managed_hosts:
       - "Linux servers"
     templates:
       - "Linux by Zabbix agent"
+
+  - host: "TestServer"
+    name: "TestServer"
+    ip: "192.168.2.220"
+    port: "10050"
+    groups:
+      - "Linux servers"
+    templates:
+      - "Linux by Zabbix agent"
