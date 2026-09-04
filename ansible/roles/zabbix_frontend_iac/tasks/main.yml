@@ -63,6 +63,8 @@
           - "{{ zabbix_frontend_api_username }}"
           - --mode
           - rotate
+          - --status-file
+          - /var/lib/zabbix/.homelab-admin-bootstrap-status
       environment:
         ZABBIX_RECOVERY_PASSWORD: "zabbix"
         ZABBIX_DESIRED_PASSWORD: "{{ zabbix_frontend_api_password }}"
@@ -91,6 +93,8 @@
       - "{{ zabbix_frontend_api_username }}"
       - --mode
       - verify
+      - --status-file
+      - /var/lib/zabbix/.homelab-admin-bootstrap-status
   environment:
     ZABBIX_DESIRED_PASSWORD: "{{ zabbix_frontend_api_password }}"
   register: zabbix_admin_verify
