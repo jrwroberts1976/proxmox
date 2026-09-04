@@ -1,0 +1,8 @@
+---
+zabbix_host_iac_api_url: "http://192.168.2.184:8080/api_jsonrpc.php"
+
+# Runtime secret on the TestServer control node.
+# The token itself is never committed to Git.
+zabbix_host_iac_token_file: "/home/james/docker/secrets/zabbix-homelab-automation-token"
+
+zabbix_managed_hosts: []

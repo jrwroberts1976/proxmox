@@ -1,0 +1,45 @@
+---
+- name: Validate Zabbix host IaC configuration
+  ansible.builtin.assert:
+    that:
+      - zabbix_host_iac_api_url | length > 0
+      - zabbix_host_iac_token_file | length > 0
+      - zabbix_managed_hosts | length > 0
+    fail_msg: "Zabbix host IaC configuration is incomplete."
+
+- name: Verify Zabbix automation token exists on control node
+  ansible.builtin.stat:
+    path: "{{ zabbix_host_iac_token_file }}"
+  register: zabbix_host_iac_token
+  delegate_to: localhost
+  become: false
+
+- name: Require Zabbix automation token
+  ansible.builtin.assert:
+    that:
+      - zabbix_host_iac_token.stat.exists
+      - zabbix_host_iac_token.stat.isreg
+    fail_msg: "Zabbix automation token file is unavailable."
+  delegate_to: localhost
+  become: false
+
+- name: Reconcile managed hosts in Zabbix
+  ansible.builtin.command:
+    argv:
+      - python3
+      - "{{ role_path }}/files/zabbix_host_iac.py"
+      - --api-url
+      - "{{ zabbix_host_iac_api_url }}"
+      - --token-file
+      - "{{ zabbix_host_iac_token_file }}"
+      - --host-json
+      - "{{ item | to_json }}"
+  loop: "{{ zabbix_managed_hosts }}"
+  loop_control:
+    label: "{{ item.host }}"
+  register: zabbix_host_iac_result
+  changed_when: zabbix_host_iac_result.rc == 2
+  failed_when: zabbix_host_iac_result.rc not in [0, 2]
+  delegate_to: localhost
+  become: false
+  no_log: false

@@ -28,3 +28,5 @@ credentials/
 # Ansible secrets
 ansible/.vault_pass
 ansible/vault-password*
+__pycache__/
+*.py[cod]
