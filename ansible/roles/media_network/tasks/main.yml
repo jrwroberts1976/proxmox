@@ -27,15 +27,15 @@
     set -euo pipefail
 
     connection={{ media_network_connection_name | quote }}
+    metric={{ media_network_route_metric | int }}
 
     nmcli -t -f NAME connection show | grep -Fxq "$connection"
 
-    current="$(nmcli -g connection.autoconnect,ipv4.method,ipv4.route-metric,ipv6.method,ipv6.route-metric connection show "$connection")"
-    expected="$(printf 'yes\\nauto\\n%s\\nauto\\n%s' \
-      {{ media_network_route_metric }} \
-      {{ media_network_route_metric }})"
-
-    if [ "$current" = "$expected" ]; then
+    if [ "$(nmcli -g connection.autoconnect connection show "$connection")" = 'yes' ] && \
+       [ "$(nmcli -g ipv4.method connection show "$connection")" = 'auto' ] && \
+       [ "$(nmcli -g ipv4.route-metric connection show "$connection")" = "$metric" ] && \
+       [ "$(nmcli -g ipv6.method connection show "$connection")" = 'auto' ] && \
+       [ "$(nmcli -g ipv6.route-metric connection show "$connection")" = "$metric" ]; then
       echo 'changed=0'
       exit 0
     fi
@@ -43,9 +43,9 @@
     nmcli connection modify "$connection" \
       connection.autoconnect yes \
       ipv4.method auto \
-      ipv4.route-metric {{ media_network_route_metric }} \
+      ipv4.route-metric "$metric" \
       ipv6.method auto \
-      ipv6.route-metric {{ media_network_route_metric }}
+      ipv6.route-metric "$metric"
 
     nmcli device reapply {{ media_network_primary_interface | quote }}
     echo 'changed=1'
