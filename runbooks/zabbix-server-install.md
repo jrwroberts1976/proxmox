@@ -47,7 +47,7 @@ OpenTofu CT201
 
 Do not manually create the database, import the schema, change persistent Nginx/PHP/Zabbix configuration, or bypass Ansible/Vault controls.
 
-## Current validated state — 3 September 2026
+## Final validated state — 4 September 2026
 
 Completed:
 
@@ -61,6 +61,9 @@ Stage 6A  Nginx baseline                        PASS
 Stage 6B  Zabbix app + standard schema          PASS
 Stage 6C  TimescaleDB conversion                PASS
 Locale    en_GB + en_US for PHP/Zabbix          PASS
+Stage 7A  Vault-backed Admin credential          PASS
+Stage 7B  BH22 8QL frontend/Geomap IaC           PASS
+Final     Ansible idempotence + OpenTofu drift   PASS
 ```
 
 Final Stage 6C evidence:
@@ -267,36 +270,65 @@ ansible/roles/zabbix_frontend_iac/
 ansible/playbooks/zabbix-frontend-iac.yml
 ```
 
-### Current deferred prerequisite
+### Admin credential bootstrap
 
-On 3 September, API authentication failed with:
+The factory/default `Admin` credential is not retained as BAU authority.
 
-```text
-Incorrect user name or password or account is temporarily blocked.
-```
-
-Database inspection proved:
+A unique credential is stored only in encrypted CT201 Ansible Vault:
 
 ```text
-username=Admin
-attempt_failed=4
-attempt_ip=192.168.2.220
+ansible/inventories/zabbix-lxc/group_vars/all/vault.yml
 ```
 
-Do not continue guessing passwords.
-
-Next safe sequence:
+The frontend-IaC role performs a one-time controlled bootstrap when its marker is absent:
 
 ```text
-controlled Admin credential recovery/rotation
-  -> store unique Admin credential in Ansible Vault
-  -> prove API login
-  -> apply frontend IaC
-  -> verify BH22 8QL Geomap
-  -> second run changed=0
+documented recovery hash
+  -> clear failed-login state
+  -> API login using temporary recovery credential
+  -> rotate Admin to Vault credential
+  -> verify Vault credential
+  -> write bootstrap marker
 ```
 
-The factory/default credential must not be retained as BAU authority.
+Subsequent runs skip recovery/rotation and verify the Vault-backed credential only.
+
+The role owns its state directory:
+
+```text
+/var/lib/homelab-zabbix-frontend-iac/
+├── admin-bootstrap-status
+└── admin-bootstrap-v1
+```
+
+Do not assume `/var/lib/zabbix` exists. The Debian/Zabbix install on CT201 does not provide that directory.
+
+Validated evidence:
+
+```text
+admin-bootstrap-status: result=PASS mode=verify
+admin-bootstrap-v1: PRESENT
+marker permissions: root:root 0600
+Admin attempt_failed: 0
+```
+
+### Geomap application
+
+The same frontend-IaC play applies the host inventory/location and Global view Geomap state.
+
+First successful application:
+
+```text
+zabbix-lxc-01 : ok=10 changed=5 unreachable=0 failed=0
+```
+
+Second-run idempotence proof:
+
+```text
+zabbix-lxc-01 : ok=7 changed=0 unreachable=0 failed=0 skipped=3
+```
+
+The Geomap authority is therefore considered closed.
 
 ## Final acceptance
 
@@ -316,6 +348,16 @@ database listener remains localhost-only
 Ansible second pass changed=0
 OpenTofu detailed plan exit code=0
 Git working tree clean
+```
+
+Final closure evidence:
+
+```text
+frontend_iac_changed=0
+frontend_iac_failed=0
+frontend_iac_unreachable=0
+tofu_exit_code=0
+tofu_drift=ZERO
 ```
 
 ## Safety rules
