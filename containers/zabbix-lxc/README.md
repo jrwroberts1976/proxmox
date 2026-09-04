@@ -148,6 +148,8 @@ CT201 remains unprivileged. Nesting is a declared requirement and must not be re
 | Locale correction | `en_GB` + `en_US` availability for PHP/Zabbix | COMPLETE |
 | 7A | Vault-backed Admin credential bootstrap/rotation | COMPLETE |
 | 7B | BH22 8QL frontend/Geomap IaC | COMPLETE |
+| 8 | Dedicated Grafana API identity + SOPS token authority | COMPLETE |
+| 9 | Grafana Zabbix plugin/datasource integration | COMPLETE |
 | Final gate | Ansible idempotence + OpenTofu zero drift | PASS |
 
 ## Database architecture
@@ -233,6 +235,32 @@ Second-run frontend-IaC proof:
 ```text
 zabbix-lxc-01 : ok=7 changed=0 unreachable=0 failed=0 skipped=3
 ```
+
+## Grafana integration
+
+CT201 now exposes a dedicated read-only API identity for Grafana rather than using the administrative credential.
+
+Managed Zabbix objects:
+
+```text
+role:       Grafana API Read Only
+user group: Grafana Read Only
+user:       grafana-zabbix
+token:      grafana-datasource
+```
+
+The token is captured once into SOPS-encrypted authority in the `docker-env` repository and is not regenerated on normal Ansible reruns.
+
+Final functional evidence from the Grafana container on `ids-01`:
+
+```text
+grafana_to_zabbix=PASS
+proxmox_group_visibility=PASS
+```
+
+This proves the Grafana datasource can read Zabbix and see the `Infrastructure/Proxmox` host group. It does not yet mean the Proxmox VE host itself is enrolled in Zabbix; that remains a separate monitoring-backlog item.
+
+See [`../../docs/zabbix-grafana-integration.md`](../../docs/zabbix-grafana-integration.md).
 
 ## Final OpenTofu gate
 
