@@ -1,0 +1,97 @@
+---
+- name: Require Debian-family host
+  ansible.builtin.assert:
+    that:
+      - ansible_os_family == 'Debian'
+    fail_msg: This role supports Debian-family hosts only.
+
+- name: Require Kodi runtime user
+  ansible.builtin.getent:
+    database: passwd
+    key: "{{ kodi_user }}"
+
+- name: Install Kodi display stack
+  ansible.builtin.apt:
+    name: "{{ kodi_packages }}"
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Ensure Kodi runtime user has media device access
+  ansible.builtin.user:
+    name: "{{ kodi_user }}"
+    groups:
+      - audio
+      - video
+      - render
+      - input
+    append: true
+
+- name: Install managed Kodi systemd service
+  ansible.builtin.copy:
+    dest: "/etc/systemd/system/{{ kodi_service_name }}.service"
+    owner: root
+    group: root
+    mode: '0644'
+    content: |
+      [Unit]
+      Description=Kodi Media Center
+      After=systemd-user-sessions.service network-online.target sound.target
+      Wants=network-online.target
+      Conflicts=getty@{{ kodi_tty }}.service
+
+      [Service]
+      Type=simple
+      User={{ kodi_user }}
+      Group={{ kodi_group }}
+      PAMName=login
+      TTYPath=/dev/{{ kodi_tty }}
+      StandardInput=tty
+      StandardOutput=journal
+      StandardError=journal
+      Environment=HOME={{ kodi_home }}
+      Environment=DISPLAY={{ kodi_display }}
+      ExecStart=/usr/bin/xinit /usr/bin/kodi-standalone -- {{ kodi_display }} {{ kodi_tty }} -keeptty -nolisten tcp
+      Restart=on-failure
+      RestartSec={{ kodi_restart_sec }}
+      KillMode=control-group
+      TimeoutStopSec=20
+
+      [Install]
+      WantedBy=graphical.target
+  notify: Restart Kodi
+
+- name: Ensure Kodi service is enabled and running
+  ansible.builtin.systemd_service:
+    name: "{{ kodi_service_name }}"
+    enabled: true
+    state: started
+    daemon_reload: true
+
+- name: Flush Kodi handlers before validation
+  ansible.builtin.meta: flush_handlers
+
+- name: Verify Kodi service is active
+  ansible.builtin.command:
+    cmd: "systemctl is-active {{ kodi_service_name }}"
+  register: kodi_service_active
+  changed_when: false
+  failed_when: kodi_service_active.stdout.strip() != 'active'
+
+- name: Verify Kodi service is enabled
+  ansible.builtin.command:
+    cmd: "systemctl is-enabled {{ kodi_service_name }}"
+  register: kodi_service_enabled
+  changed_when: false
+  failed_when: kodi_service_enabled.stdout.strip() != 'enabled'
+
+- name: Verify X display is owned by Kodi service
+  ansible.builtin.shell:
+    cmd: "set -o pipefail && pgrep -a Xorg | grep -F -- '{{ kodi_display }}'"
+    executable: /bin/bash
+  changed_when: false
+
+- name: Verify Kodi process is running
+  ansible.builtin.command:
+    cmd: pgrep -a -u {{ kodi_user }} kodi.bin
+  changed_when: false
