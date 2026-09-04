@@ -1,0 +1,12 @@
+---
+kodi_user: james
+kodi_group: james
+kodi_home: /home/james
+kodi_service_name: kodi
+kodi_display: ':0'
+kodi_tty: tty1
+kodi_restart_sec: 10
+kodi_packages:
+  - kodi
+  - xinit
+  - xserver-xorg
