@@ -41,17 +41,31 @@
   when: not zabbix_admin_bootstrap_marker.stat.exists
   block:
     - name: Apply documented Zabbix Admin recovery password
-      community.postgresql.postgresql_query:
-        db: zabbix
-        query: >-
-          UPDATE users
-             SET passwd = '$2a$10$ZXIvHAEP2ZM.dLXTm6uPHOMVlARXX7cqjbhM6Fn0cANzkCQBWpMrS'
-           WHERE username = 'Admin';
+      ansible.builtin.command:
+        argv:
+          - psql
+          - -d
+          - zabbix
+          - -v
+          - ON_ERROR_STOP=1
+          - -c
+          - >-
+            UPDATE users
+               SET passwd = '$2a$10$ZXIvHAEP2ZM.dLXTm6uPHOMVlARXX7cqjbhM6Fn0cANzkCQBWpMrS',
+                   attempt_failed = 0,
+                   attempt_clock = 0,
+                   attempt_ip = ''
+             WHERE username = 'Admin';
       become_user: postgres
       vars:
         ansible_become: true
         ansible_become_method: su
         ansible_become_flags: "-s /bin/sh"
+      register: zabbix_admin_recovery
+      changed_when: "'UPDATE 1' in zabbix_admin_recovery.stdout"
+      failed_when:
+        - zabbix_admin_recovery.rc != 0
+        - "'UPDATE 1' not in zabbix_admin_recovery.stdout"
 
     - name: Rotate recovered Admin credential to Vault authority
       ansible.builtin.command:
