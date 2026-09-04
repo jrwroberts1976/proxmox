@@ -2,21 +2,15 @@
 kodi_user: james
 kodi_group: james
 kodi_home: /home/james
-kodi_service_name: kodi
-kodi_display: ':0'
-kodi_tty: tty1
-kodi_vt: vt1
-kodi_restart_sec: 10
+kodi_session: kodi-gbm
+kodi_session_file: /usr/share/wayland-sessions/kodi-gbm.desktop
 kodi_display_manager_service: lightdm.service
-kodi_xwrapper_allowed_users: console
-kodi_xwrapper_needs_root_rights: 'yes'
+kodi_lightdm_dropin_dir: /etc/lightdm/lightdm.conf.d
+kodi_lightdm_dropin_file: /etc/lightdm/lightdm.conf.d/50-kodi-autologin.conf
+kodi_legacy_service_file: /etc/systemd/system/kodi.service
+kodi_xwrapper_config_file: /etc/X11/Xwrapper.config
 kodi_packages:
   - kodi
-  - xinit
-  - xserver-xorg-core
-  - xserver-xorg-input-libinput
-  - xserver-xorg-legacy
-kodi_conflicting_xorg_packages:
-  - xserver-xorg
-  - xserver-xorg-video-all
-  - xserver-xorg-video-fbdev
+  - lightdm
+  - labwc
+  - xwayland
