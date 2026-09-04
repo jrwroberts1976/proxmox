@@ -175,7 +175,7 @@ def ensure_user_group(api, name, group_ids):
             "usergroup.create",
             {
                 "name": name,
-                "gui_access": 3,
+                "gui_access": 0,
                 "users_status": 0,
                 "debug_mode": 0,
                 "hostgroup_rights": desired_rights,
@@ -184,7 +184,7 @@ def ensure_user_group(api, name, group_ids):
         return result["usrgrpids"][0], True
 
     matches = (
-        int_value(group.get("gui_access")) == 3
+        int_value(group.get("gui_access")) == 0
         and int_value(group.get("users_status")) == 0
         and int_value(group.get("debug_mode")) == 0
         and normalize_rights(group.get("hostgroup_rights")) == desired_norm
