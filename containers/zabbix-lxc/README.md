@@ -1,10 +1,10 @@
 # Zabbix LXC
 
-This project builds the first native Proxmox LXC application workload in the homelab using OpenTofu for infrastructure and Ansible for operating-system and application configuration.
+This project is the first native Proxmox LXC application workload in the homelab. OpenTofu owns the container infrastructure; Ansible owns Debian and the application stack; Git is the configuration authority.
 
-## Current validated state — 3 September 2026
+## Final validated state — 4 September 2026
 
-CT201 is live and healthy.
+CT201 is technically complete.
 
 ```text
 Proxmox
@@ -20,13 +20,13 @@ Proxmox
     └── unattended-upgrades
 ```
 
-Validated application endpoint:
+Application endpoint:
 
 ```text
 http://192.168.2.184:8080/
 ```
 
-Validated state:
+Final acceptance evidence:
 
 ```text
 CTID=201
@@ -48,7 +48,12 @@ zabbix_frontend=ACTIVE
 nginx=ACTIVE
 php_fpm=ACTIVE
 alloy=HEALTHY
-ansible_idempotence=PASS
+frontend_iac_idempotence=PASS
+ansible_changed=0
+ansible_failed=0
+ansible_unreachable=0
+tofu_exit_code=0
+tofu_drift=ZERO
 ```
 
 Pre-TimescaleDB-conversion rollback dump retained on CT201:
@@ -62,7 +67,7 @@ Pre-TimescaleDB-conversion rollback dump retained on CT201:
 - Proxmox node: `PROXMOX`
 - CT ID: `201`
 - Hostname: `zabbix-lxc-01`
-- IPv4: `192.168.2.184` (DHCP commissioning address)
+- IPv4: `192.168.2.184`
 - OS: Debian 13
 - Container type: unprivileged LXC
 - LXC nesting: enabled
@@ -108,8 +113,6 @@ Provider credentials are loaded from:
 /home/james/.config/homelab-iac/proxmox.env
 ```
 
-The credential file remains outside Git.
-
 The project pins:
 
 ```text
@@ -142,8 +145,10 @@ CT201 remains unprivileged. Nesting is a declared requirement and must not be re
 | 6A | Nginx baseline | COMPLETE |
 | 6B | Zabbix Server, Agent 2, PHP frontend and standard schema | COMPLETE |
 | 6C | Zabbix TimescaleDB conversion | COMPLETE |
-| Locale correction | en_GB + en_US availability for PHP/Zabbix | COMPLETE |
-| Frontend IaC / BH22 8QL Geomap | Admin/API credential prerequisite | DEFERRED |
+| Locale correction | `en_GB` + `en_US` availability for PHP/Zabbix | COMPLETE |
+| 7A | Vault-backed Admin credential bootstrap/rotation | COMPLETE |
+| 7B | BH22 8QL frontend/Geomap IaC | COMPLETE |
+| Final gate | Ansible idempotence + OpenTofu zero drift | PASS |
 
 ## Database architecture
 
@@ -159,7 +164,7 @@ PostgreSQL 17 database/user
 
 PostgreSQL remains bound to localhost only.
 
-The TimescaleDB conversion role reads the expected hypertables from the installed Zabbix vendor schema instead of hard-coding a release-specific list.
+The TimescaleDB conversion role reads expected hypertables from the installed Zabbix vendor schema instead of hard-coding a release-specific list.
 
 ## Locale requirement
 
@@ -179,11 +184,40 @@ LANG=en_GB.UTF-8
 LANGUAGE=en_GB:en
 ```
 
-Do not fix missing Zabbix locales manually. Re-run the `zabbix_server` role and validate PHP locale availability.
+## Admin/API credential authority
 
-## Frontend IaC target
+The Zabbix `Admin` credential is no longer the factory/default password.
 
-The desired Geomap authority is already in Git:
+Ansible Vault contains the unique API/frontend credential:
+
+```text
+ansible/inventories/zabbix-lxc/group_vars/all/vault.yml
+```
+
+The frontend-IaC role performs one-time bootstrap/recovery only when its completion marker is absent. After bootstrap it verifies the Vault-backed credential and does not reset the account again.
+
+Managed state is stored in:
+
+```text
+/var/lib/homelab-zabbix-frontend-iac/
+├── admin-bootstrap-status
+└── admin-bootstrap-v1
+```
+
+Final evidence:
+
+```text
+admin-bootstrap-status: result=PASS mode=verify
+admin-bootstrap-v1: PRESENT
+marker mode: root:root 0600
+Admin attempt_failed: 0
+```
+
+The dedicated state directory is intentional. Debian's Zabbix packages on CT201 do not provide `/var/lib/zabbix`, so automation must not assume that path exists.
+
+## BH22 8QL Geomap
+
+Frontend IaC is complete.
 
 ```text
 Dashboard: Global view
@@ -194,21 +228,35 @@ Longitude: -1.890218
 Zoom:      15
 ```
 
-Application of that state is deferred until the Zabbix `Admin` API credential is recovered/rotated and stored securely in Ansible Vault.
-
-Current diagnostic evidence on 3 September 2026:
+Second-run frontend-IaC proof:
 
 ```text
-Admin user exists
-failed API login attempts observed: 4
-source: 192.168.2.220 (TestServer)
+zabbix-lxc-01 : ok=7 changed=0 unreachable=0 failed=0 skipped=3
 ```
 
-Do not continue guessing credentials. The next safe action is controlled Admin credential recovery/rotation, Vault storage, API login proof, then frontend-IaC application and a `changed=0` second pass.
+## Final OpenTofu gate
+
+Final command:
+
+```bash
+cd /home/james/projects/proxmox/containers/zabbix-lxc
+set -a
+. /home/james/.config/homelab-iac/proxmox.env
+set +a
+tofu plan -input=false -detailed-exitcode
+```
+
+Final result:
+
+```text
+No changes. Your infrastructure matches the configuration.
+tofu_exit_code=0
+tofu_drift=ZERO
+```
 
 ## Acceptance gates
 
-A completed CT201 change should preserve:
+A completed CT201 change must preserve:
 
 ```text
 systemd=running
@@ -220,9 +268,10 @@ nginx=active
 php8.4-fpm=active
 alloy=active
 frontend HTTP=healthy
+database listener=LOCALHOST_ONLY
 Ansible second pass changed=0
 OpenTofu plan exit code=0
 repository clean
 ```
 
-Secrets must never be printed, committed or left in plaintext files in the repository.
+Secrets must never be printed, committed in plaintext or left in temporary repository files.
