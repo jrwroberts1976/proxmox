@@ -1,0 +1,7 @@
+---
+node_exporter_package: prometheus-node-exporter
+node_exporter_service: prometheus-node-exporter
+node_exporter_port: 9100
+node_exporter_textfile_directory: /var/lib/node_exporter/textfile_collector
+node_exporter_extra_args:
+  - "--collector.textfile.directory={{ node_exporter_textfile_directory }}"
