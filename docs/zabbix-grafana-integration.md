@@ -6,7 +6,7 @@
 
 The Zabbix service identity, API token authority, Grafana Zabbix plugin and Grafana datasource path are working end to end.
 
-This document covers the Grafana-to-Zabbix integration only. It does **not** mean the Proxmox host has yet been onboarded into Zabbix with the Proxmox VE template; that remains separate backlog work.
+This document covers the Grafana-to-Zabbix integration. The later Proxmox-host onboarding is also complete: the Proxmox VE host is enrolled in Zabbix as host ID `10683` using the approved Proxmox API/template integration.
 
 ## Architecture
 
@@ -170,10 +170,15 @@ Completed:
 - Grafana Zabbix datasource provisioning;
 - end-to-end API proof.
 
-Still backlog:
+Subsequent onboarding completed:
 
-- onboard the Proxmox VE host itself into Zabbix using the selected Proxmox integration/template;
-- add Proxmox-specific Zabbix items/triggers only where they add value beyond Prometheus;
-- any optional dashboard/alert enhancements.
+- Proxmox VE host enrolled through the selected Proxmox integration/template as host ID `10683`;
+- first Linux Agent 2 batch enrolled and collecting: `ids-01` (`10684`), `TestServer` (`10685`), `DietPi` (`10686`) and `media-01` (`10687`).
+
+Remaining work is BAU/optional enhancement only:
+
+- add Proxmox-specific or Linux-host Zabbix items/triggers only where they add value beyond Prometheus;
+- optional dashboard/alert enhancements;
+- maintain the Grafana token materialisation ownership requirement (UID `472`, mode `0400`) in deployment automation.
 
 Prometheus/Loki/Alloy remain authoritative for the existing metrics/logging paths. Zabbix complements rather than replaces them.
