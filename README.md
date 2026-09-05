@@ -83,7 +83,7 @@ This repository tracks the build, configuration, migration, and operational runb
 - [ ] Review/update HP BIOS firmware
 - [x] Add Proxmox target to central Prometheus/Grafana
 - [x] Provision Grafana Zabbix plugin/datasource with SOPS-backed read-only API identity
-- [ ] Onboard the Proxmox VE host itself into Zabbix using the approved Proxmox integration/template
+- [x] Onboard the Proxmox VE host itself into Zabbix using the approved Proxmox integration/template (host ID `10683`)
 - [ ] Host security baseline
 - [ ] Backup destination and restore test
 - [ ] Jenkins IaC integration
